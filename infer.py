@@ -182,6 +182,7 @@ def collect_stream_silent(resp, output_file: str | None) -> dict:
 
     end_time = time.time()
     decode_time = (end_time - first_token_time) if first_token_time and token_count > 1 else 0
+ 
     return {"tokens": token_count, "decode_time": decode_time, "text": "".join(chunks)}
 
 
@@ -293,7 +294,14 @@ def run(args):
     if wall_time > 0:
         print(f"  System TPS: {total_tokens / wall_time:.2f} tokens/s")
     if successful > 0:
-        avg_decode = sum(r["decode_time"] for r in results if r["tokens"] > 0) / successful
+        # Count only the requests that have a valid calculated decode_time (> 0)
+        successful_decode_reqs = sum(1 for r in results if r["decode_time"] > 0)
+        
+        if successful_decode_reqs > 0:
+            avg_decode = sum(r["decode_time"] for r in results if r["decode_time"] > 0) / successful_decode_reqs
+        else:
+            avg_decode = 0
+        
         avg_tokens = total_tokens / successful
         print(f"  Avg tokens/request: {avg_tokens:.0f}")
         print(f"  Avg decode_time/request: {avg_decode:.2f}s")
@@ -326,4 +334,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()    
