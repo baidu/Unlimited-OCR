@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "macos-unlimited-ocr"
+version = "0.1.0"
+description = "Apple Silicon macOS runner for baidu/Unlimited-OCR using Transformers."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.6",
+    "torchvision>=0.21",
+    "transformers==4.57.1",
+    "accelerate>=1.8",
+    "pillow>=11.0",
+    "matplotlib>=3.10",
+    "pymupdf>=1.26",
+    "requests>=2.32",
+    "einops>=0.8",
+    "addict>=2.4",
+    "easydict>=1.13",
+    "psutil>=6",
+    "sentencepiece>=0.2",
+    "protobuf>=5",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+macos-unlimited-ocr = "macos_unlimited_ocr.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
