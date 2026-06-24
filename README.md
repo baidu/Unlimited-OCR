@@ -326,6 +326,37 @@ styled `result.html` and opens it).
   - `infer.py` (the SGLang batch driver) is **CUDA-only** — it launches SGLang with
     `--attention-backend fa3` (FlashAttention 3). Use `infer_mac.py` on macOS.
 
+### Linux CPU / WSL
+
+Despite the filenames, `prepare_mac_model.py` and `infer_mac.py` are device-agnostic
+for non-CUDA targets. The same scripts run on Linux (including WSL2) in **CPU mode**
+with no code changes — `--device auto` falls back to CPU when neither MPS nor CUDA
+is available.
+
+```shell
+# Inside WSL (Ubuntu/Debian) or any Linux:
+sudo apt install python3.12 python3.12-venv     # or install uv
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install torch torchvision "transformers==4.57.1" pillow matplotlib \
+            einops addict easydict pymupdf psutil accelerate huggingface_hub markdown
+
+python prepare_mac_model.py
+python infer_mac.py /path/to.pdf --device cpu
+```
+
+WSL-specific gotchas:
+
+  - **Clone into the Linux filesystem** (`~/code/...`), not `/mnt/c/...`. The symlinks
+    that `prepare_mac_model.py` creates (weights → HF cache) work cleanly on ext4 but
+    are flaky on the 9P-mounted Windows drive.
+  - Expect single-page CPU inference to take **several minutes** on a typical x86 core —
+    the M4 Pro's ~40 s is not representative. Use a powerful CPU or fewer pages.
+  - Peak RAM: ~12.6 GB at `fp32`, ~6.3 GB at `bf16` (CPU bf16 needs an AVX-512_BF16 or
+    AMX-capable host to be fast; otherwise stick with `fp32`).
+  - If your WSL2 instance has CUDA passthrough to an NVIDIA GPU, the upstream
+    `python infer.py --pdf ...` path already supports CUDA fully — no need to use
+    `infer_mac.py`.
+
 ## Visualization
 
 <img src="assets/long-horizon-ocr.gif" width="100%" alt="Long-horizon OCR demo" />
