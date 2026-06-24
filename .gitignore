@@ -27,8 +27,12 @@ htmlcov/
 
 # Local runtime outputs
 outputs/
+outputs_*/
 log/
 *.log
+
+# Mac-prepared model mirror (populated by prepare_mac_model.py)
+model_local/
 
 # OS and editor files
 .DS_Store
