@@ -194,7 +194,9 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
         "skip_special_tokens": False,
         "stream": True,
         "images_config": {"image_mode": args.image_mode},
-        "max_tokens": CONTEXT_LENGTH,  # prevents infinite generation loops on pathological inputs
+        # max_tokens = output tokens only; image+prompt consume ~1500-4000 tokens of the
+        # 32K context window before generation starts. Reserve 4K to avoid silent truncation.
+        "max_tokens": CONTEXT_LENGTH - 4096,  # prevents infinite generation loops; headroom for image tokens
     }
     if NO_REPEAT_NGRAM_SIZE > 0 and NGRAM_WINDOW > 0:
         payload["custom_logit_processor"] = get_ngram_processor_str()
