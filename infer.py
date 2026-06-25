@@ -5,6 +5,7 @@ Test project
 Two input modes are supported:
   1. Dataset images: pass --image_dir and each image is sent as one request.
   2. PDF pages: pass --pdf and each converted page is sent as one request.
+  3. Completed
 """
 
 import argparse
