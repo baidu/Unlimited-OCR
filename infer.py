@@ -97,6 +97,7 @@ def start_server(args):
         "sglang.launch_server",
         "--model",
         args.model_dir,
+        "--trust-remote-code",
         "--served-model-name",
         SERVED_MODEL_NAME,
         "--attention-backend",
@@ -193,6 +194,7 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
         "skip_special_tokens": False,
         "stream": True,
         "images_config": {"image_mode": args.image_mode},
+        "max_tokens": CONTEXT_LENGTH,  # prevents infinite generation loops on pathological inputs
     }
     if NO_REPEAT_NGRAM_SIZE > 0 and NGRAM_WINDOW > 0:
         payload["custom_logit_processor"] = get_ngram_processor_str()
