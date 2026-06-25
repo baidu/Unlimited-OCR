@@ -273,14 +273,25 @@ def run(args):
     print(f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, image_mode={args.image_mode}")
 
     wall_start = time.time()
-    results = []
+    results_map = {}
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
         futures = {
-            executor.submit(infer_one, image_path, output_file, args, i + 1): image_path
+            executor.submit(infer_one, image_path, output_file, args, i + 1): i
             for i, (image_path, output_file) in enumerate(jobs)
         }
         for future in as_completed(futures):
-            results.append(future.result())
+            job_idx = futures[future]
+            results_map[job_idx] = future.result()
+
+    results = [results_map[i] for i in range(len(jobs))]
+
+    if args.output_dir and args.merge_output:
+        merged_file = os.path.join(args.output_dir, "final_merged_document.md")
+        with open(merged_file, "w", encoding="utf-8") as mf:
+            for i, (image_path, _) in enumerate(jobs):
+                if results[i]["tokens"] > 0:
+                    mf.write(f"\n\n\n")
+                    mf.write(results[i]["text"])
 
     wall_time = time.time() - wall_start
     total_tokens = sum(r["tokens"] for r in results)
@@ -297,6 +308,8 @@ def run(args):
         avg_tokens = total_tokens / successful
         print(f"  Avg tokens/request: {avg_tokens:.0f}")
         print(f"  Avg decode_time/request: {avg_decode:.2f}s")
+    if args.output_dir and args.merge_output:
+        print(f"  Merged file saved to: {merged_file}")
     print(f"{'=' * 60}")
 
 
@@ -313,6 +326,7 @@ def parse_args():
     parser.add_argument("--model_dir", default="baidu/Unlimited-OCR")
     parser.add_argument("--image_mode", choices=("gundam", "base"), default="gundam")
     parser.add_argument("--server_log", default="./log/sglang_server.log")
+    parser.add_argument("--merge_output", action="store_true", help="Compile all page markdowns into a unified chronologically ordered output file")
     return parser.parse_args()
 
 
