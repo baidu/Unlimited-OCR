@@ -10,6 +10,7 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,7 +48,7 @@ def get_ngram_processor_str():
     return NO_REPEAT_NGRAM_PROCESSOR_STR
 
 
-def pdf_to_images(pdf_path: str, dpi: int = 300) -> list[str]:
+def pdf_to_images(pdf_path: str, dpi: int = 300) -> tuple[list[str], str]:
     import fitz
 
     doc = fitz.open(pdf_path)
@@ -59,7 +60,7 @@ def pdf_to_images(pdf_path: str, dpi: int = 300) -> list[str]:
         page.get_pixmap(matrix=mat).save(out_path)
         image_paths.append(out_path)
     doc.close()
-    return image_paths
+    return image_paths, tmp_dir
 
 
 def encode_image(image_path: str) -> dict:
@@ -237,9 +238,14 @@ def collect_dataset_images(image_dir: str) -> list[str]:
     return sorted(image_files, key=lambda f: os.path.getsize(f), reverse=True)
 
 
-def build_jobs(args) -> list[tuple[str, str | None]]:
+def build_jobs(args) -> tuple[list[tuple[str, str | None]], str | None]:
     if args.pdf:
-        image_files = pdf_to_images(args.pdf, dpi=PDF_DPI)
+        if args.image_mode != "base":
+            raise ValueError(
+                f"--image_mode '{args.image_mode}' is not supported for PDF input. "
+                "PDF/multi-page processing requires --image_mode base (see README)."
+            )
+        image_files, tmp_dir = pdf_to_images(args.pdf, dpi=PDF_DPI)
         prefix = os.path.splitext(os.path.basename(args.pdf))[0]
         jobs = []
         for i, image_path in enumerate(image_files):
@@ -247,7 +253,7 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
             if args.output_dir:
                 output_file = os.path.join(args.output_dir, f"{prefix}_page_{i + 1:04d}.md")
             jobs.append((image_path, output_file))
-        return jobs
+        return jobs, tmp_dir
 
     if not args.image_dir:
         raise ValueError("Either --image_dir or --pdf is required")
@@ -261,11 +267,11 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
             stem = os.path.splitext(rel)[0].replace(os.sep, "__")
             output_file = os.path.join(args.output_dir, f"{stem}.md")
         jobs.append((image_path, output_file))
-    return jobs
+    return jobs, None
 
 
 def run(args):
-    jobs = build_jobs(args)
+    jobs, tmp_dir = build_jobs(args)
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
 
@@ -274,13 +280,17 @@ def run(args):
 
     wall_start = time.time()
     results = []
-    with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
-        futures = {
-            executor.submit(infer_one, image_path, output_file, args, i + 1): image_path
-            for i, (image_path, output_file) in enumerate(jobs)
-        }
-        for future in as_completed(futures):
-            results.append(future.result())
+    try:
+        with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+            futures = {
+                executor.submit(infer_one, image_path, output_file, args, i + 1): image_path
+                for i, (image_path, output_file) in enumerate(jobs)
+            }
+            for future in as_completed(futures):
+                results.append(future.result())
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     wall_time = time.time() - wall_start
     total_tokens = sum(r["tokens"] for r in results)
