@@ -314,7 +314,7 @@ docker run --gpus all -p 10000:10000 unlimited-ocr
 # Use a local model directory instead of downloading from Hugging Face
 docker run --gpus all -p 10000:10000 \
     -v /path/to/local-model:/model \
-    unlimited-ocr --model-dir /model
+    unlimited-ocr --model /model
 
 # Batch inference with infer.py (launches server automatically)
 docker run --gpus all \

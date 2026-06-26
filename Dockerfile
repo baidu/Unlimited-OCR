@@ -3,13 +3,17 @@
 # Build:
 #   docker build -t unlimited-ocr .
 #
-# Run (SGLang server on port 10000, GPU 0):
+# Run (SGLang server on port 10000):
 #   docker run --gpus all -p 10000:10000 unlimited-ocr
 #
-# Run with a custom model path:
+# Run with a local Hugging Face model directory:
 #   docker run --gpus all -p 10000:10000 \
 #     -v /path/to/model:/model \
-#     unlimited-ocr --model-dir /model
+#     unlimited-ocr --model /model
+#
+# Run batch inference with infer.py (launches server automatically):
+#   docker run --gpus all -v /path/to/images:/data unlimited-ocr \
+#     python infer.py --image-dir /data
 
 FROM nvidia/cuda:12.9.0-runtime-ubuntu24.04
 
@@ -40,11 +44,10 @@ COPY infer.py .
 COPY assets/ assets/
 
 ENV PATH="/app/.venv/bin:$PATH"
-ENV CUDA_VISIBLE_DEVICES=0
 
 EXPOSE 10000
 
-ENTRYPOINT ["python", "-m", "sglang.launch_server", \
+CMD ["python", "-m", "sglang.launch_server", \
     "--model", "baidu/Unlimited-OCR", \
     "--served-model-name", "Unlimited-OCR", \
     "--attention-backend", "fa3", \
