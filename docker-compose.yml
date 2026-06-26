@@ -1,0 +1,31 @@
+services:
+  unlimited-ocr:
+    build:
+      context: .
+    image: unlimited-ocr:local
+    shm_size: 16gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ./data:/data:ro
+      - ./outputs:/app/outputs
+      - ./log:/app/log
+      - ./.cache/huggingface:/home/unlimited/.cache/huggingface
+    command:
+      - --image_dir
+      - /data/images
+      - --output_dir
+      - /app/outputs
+      - --concurrency
+      - "8"
+      - --image_mode
+      - gundam

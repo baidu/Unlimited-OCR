@@ -268,6 +268,53 @@ Useful options:
 --server_log ./log/sglang_server.log
 ```
 
+### Docker
+
+The Docker image packages the SGLang batch inference path from `infer.py`.
+It requires an NVIDIA GPU, a compatible host driver, and the NVIDIA Container Toolkit.
+
+Build the image locally:
+```shell
+docker build -t unlimited-ocr:local .
+```
+
+Run OCR for an image directory:
+```shell
+docker run --rm --gpus all --shm-size 16g \
+    -v "$PWD/examples/images:/data/images:ro" \
+    -v "$PWD/outputs:/app/outputs" \
+    -v "$HOME/.cache/huggingface:/home/unlimited/.cache/huggingface" \
+    unlimited-ocr:local \
+    --image_dir /data/images \
+    --output_dir /app/outputs \
+    --concurrency 8 \
+    --image_mode gundam
+```
+
+Run OCR for a PDF:
+```shell
+docker run --rm --gpus all --shm-size 16g \
+    -v "$PWD/examples/document.pdf:/data/document.pdf:ro" \
+    -v "$PWD/outputs:/app/outputs" \
+    -v "$HOME/.cache/huggingface:/home/unlimited/.cache/huggingface" \
+    unlimited-ocr:local \
+    --pdf /data/document.pdf \
+    --output_dir /app/outputs \
+    --concurrency 8 \
+    --image_mode gundam
+```
+
+You can also edit `docker-compose.yml` for local paths and run:
+```shell
+docker compose run --rm unlimited-ocr
+```
+
+The included GitHub Actions workflow builds images for pull requests and publishes
+images on pushes to `main`, version tags, and manual runs:
+
+- GitHub Container Registry: publishes to `ghcr.io/<owner>/<repo>` using the built-in `GITHUB_TOKEN`.
+- Docker Hub: set repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` to publish `DOCKERHUB_USERNAME/unlimited-ocr`.
+
 
 ## Visualization
 
