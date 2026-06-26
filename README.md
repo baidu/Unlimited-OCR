@@ -253,12 +253,12 @@ python infer.py \
     --concurrency 8 \
     --image_mode gundam
 
-# PDF pages
+# PDF pages (multi-page inference supports base only)
 python infer.py \
     --pdf ./examples/document.pdf \
     --output_dir ./outputs \
     --concurrency 8 \
-    --image_mode gundam
+    --image_mode base
 ```
 
 Useful options:

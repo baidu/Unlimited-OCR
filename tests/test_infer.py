@@ -4,6 +4,8 @@ These tests mock the SGLang HTTP endpoint and never load the model, so they
 run on CPU-only machines (and in CI) without a GPU or the sglang package.
 """
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -215,6 +217,27 @@ class ManifestTest(unittest.TestCase):
             self.assertEqual(len(manifest["jobs"]), 3)
             # Bulky generated text must not be persisted in the manifest.
             self.assertNotIn("text", manifest["jobs"][0])
+
+
+class ParseArgsValidationTest(unittest.TestCase):
+    def _parse(self, *argv):
+        with mock.patch.object(sys, "argv", ["infer.py", *argv]):
+            return infer.parse_args()
+
+    def test_pdf_with_gundam_is_rejected(self):
+        # parser.error() exits with code 2; swallow the usage text on stderr.
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self._parse("--pdf", "doc.pdf", "--image_mode", "gundam")
+
+    def test_pdf_with_base_is_accepted(self):
+        args = self._parse("--pdf", "doc.pdf", "--image_mode", "base")
+        self.assertEqual(args.pdf, "doc.pdf")
+        self.assertEqual(args.image_mode, "base")
+
+    def test_image_dir_with_gundam_is_accepted(self):
+        args = self._parse("--image_dir", "imgs", "--image_mode", "gundam")
+        self.assertEqual(args.image_mode, "gundam")
 
 
 @unittest.skipUnless(

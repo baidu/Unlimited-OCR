@@ -399,7 +399,12 @@ def parse_args():
     parser.add_argument("--server_log", default="./log/sglang_server.log")
     parser.add_argument("--overwrite", action="store_true", help="Re-run pages even if their output file already exists")
     parser.add_argument("--keep_temp", action="store_true", help="Keep the temporary directory of rendered PDF pages")
-    return parser.parse_args()
+    args = parser.parse_args()
+    # gundam tiles a single image (crop_mode=True); multi-page/PDF inference
+    # only supports base, so reject the silently-wrong combination up front.
+    if args.pdf and args.image_mode != "base":
+        parser.error("--pdf requires --image_mode base (gundam is for single images only)")
+    return args
 
 
 def main():
