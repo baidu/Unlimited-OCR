@@ -50,13 +50,24 @@ class TestPdfToImages(unittest.TestCase):
         self.assertFalse(os.path.exists(tmp_dir), "tmpdir should be gone after cleanup")
 
 
-class TestBuildJobs(unittest.TestCase):
-    def test_pdf_mode_raises_for_gundam_image_mode(self):
-        """build_jobs raises ValueError when --image_mode gundam is used with --pdf."""
-        args = _make_args(pdf="doc.pdf", image_mode="gundam")
-        with self.assertRaises(ValueError, msg="gundam is invalid in PDF mode"):
-            infer.build_jobs(args)
+class TestParseArgs(unittest.TestCase):
+    def test_pdf_gundam_rejected_by_parser(self):
+        """parse_args exits with error when --pdf and --image_mode gundam are combined."""
+        with patch("sys.argv", ["infer.py", "--pdf", "doc.pdf", "--image_mode", "gundam",
+                                "--model_dir", "baidu/Unlimited-OCR"]):
+            with self.assertRaises(SystemExit) as ctx:
+                infer.parse_args()
+            self.assertNotEqual(ctx.exception.code, 0)
 
+    def test_pdf_base_accepted_by_parser(self):
+        """parse_args succeeds when --pdf and --image_mode base are combined."""
+        with patch("sys.argv", ["infer.py", "--pdf", "doc.pdf", "--image_mode", "base",
+                                "--model_dir", "baidu/Unlimited-OCR"]):
+            args = infer.parse_args()
+        self.assertEqual(args.image_mode, "base")
+
+
+class TestBuildJobs(unittest.TestCase):
     def test_pdf_mode_accepts_base_image_mode(self):
         """build_jobs succeeds with --image_mode base + --pdf."""
         created = tempfile.mkdtemp()
@@ -72,13 +83,6 @@ class TestBuildJobs(unittest.TestCase):
         with patch("infer.collect_dataset_images", return_value=[]):
             jobs, tmp_dir = infer.build_jobs(args)
         self.assertIsNone(tmp_dir)
-
-    def test_error_message_mentions_base(self):
-        """ValueError message tells the user to use --image_mode base."""
-        args = _make_args(pdf="doc.pdf", image_mode="gundam")
-        with self.assertRaises(ValueError) as ctx:
-            infer.build_jobs(args)
-        self.assertIn("base", str(ctx.exception))
 
 
 class TestRunCleansUpTmpdir(unittest.TestCase):

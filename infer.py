@@ -49,6 +49,11 @@ def get_ngram_processor_str():
 
 
 def pdf_to_images(pdf_path: str, dpi: int = 300) -> tuple[list[str], str]:
+    """Convert PDF pages to PNG images in a temporary directory.
+
+    Returns (image_paths, tmp_dir). The caller is responsible for deleting
+    tmp_dir after the returned paths are no longer needed.
+    """
     import fitz
 
     doc = fitz.open(pdf_path)
@@ -240,11 +245,6 @@ def collect_dataset_images(image_dir: str) -> list[str]:
 
 def build_jobs(args) -> tuple[list[tuple[str, str | None]], str | None]:
     if args.pdf:
-        if args.image_mode != "base":
-            raise ValueError(
-                f"--image_mode '{args.image_mode}' is not supported for PDF input. "
-                "PDF/multi-page processing requires --image_mode base (see README)."
-            )
         image_files, tmp_dir = pdf_to_images(args.pdf, dpi=PDF_DPI)
         prefix = os.path.splitext(os.path.basename(args.pdf))[0]
         jobs = []
@@ -323,7 +323,10 @@ def parse_args():
     parser.add_argument("--model_dir", default="baidu/Unlimited-OCR")
     parser.add_argument("--image_mode", choices=("gundam", "base"), default="gundam")
     parser.add_argument("--server_log", default="./log/sglang_server.log")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.pdf and args.image_mode != "base":
+        parser.error("--pdf mode requires --image_mode base (see README)")
+    return args
 
 
 def main():
