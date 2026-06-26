@@ -1,0 +1,22 @@
+--find-links wheel
+
+# Core ML framework
+torch==2.10.0
+torchvision==0.25.0
+transformers==4.57.1
+
+# Image processing
+Pillow==12.1.1
+pymupdf==1.27.2.2
+
+# Utilities
+matplotlib==3.10.8
+einops==0.8.2
+addict==2.4.0
+easydict==1.13
+psutil==7.2.2
+requests>=2.32
+
+# SGLang (custom wheel — see README)
+sglang==0.0.0.dev11416+g92e8bb79e
+kernels==0.11.7
