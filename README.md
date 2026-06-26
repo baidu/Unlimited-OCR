@@ -127,13 +127,12 @@ model.infer_multi(
 ### SGLang
 
 Set up the environment (uv-managed virtualenv). Install the local SGLang wheel first,
-then pin `kernels==0.9.0` and install PyMuPDF for PDF-to-image conversion:
+then install PyMuPDF for PDF-to-image conversion:
 ```shell
 uv venv --python 3.12
 source .venv/bin/activate
 
 uv pip install wheel/sglang-0.0.0.dev11416+g92e8bb79e-py3-none-any.whl
-uv pip install kernels==0.11.7
 uv pip install pymupdf==1.27.2.2
 ```
 
@@ -141,6 +140,7 @@ Start the SGLang server:
 ```shell
 python -m sglang.launch_server \
     --model baidu/Unlimited-OCR \
+    --trust-remote-code \
     --served-model-name Unlimited-OCR \
     --attention-backend fa3 \
     --page-size 1 \
@@ -258,7 +258,7 @@ python infer.py \
     --pdf ./examples/document.pdf \
     --output_dir ./outputs \
     --concurrency 8 \
-    --image_mode gundam
+    --image_mode base
 ```
 
 Useful options:
@@ -267,6 +267,73 @@ Useful options:
 --gpu 0                           # CUDA_VISIBLE_DEVICES value
 --server_log ./log/sglang_server.log
 ```
+
+### Docker
+
+The Docker image starts the OpenAI-compatible SGLang API server by default.
+It requires an NVIDIA GPU, a compatible host driver, and the NVIDIA Container Toolkit.
+
+Build the image locally:
+```shell
+docker build -t unlimited-ocr:local .
+```
+
+Start the API server:
+```shell
+docker run --rm --gpus all --shm-size 16g \
+    -p 10000:10000 \
+    -v "$HOME/.cache/huggingface:/home/unlimited/.cache/huggingface" \
+    unlimited-ocr:local
+```
+
+The API is available at `http://127.0.0.1:10000` and accepts the same
+OpenAI-compatible requests shown in the SGLang example above.
+
+By default, SGLang uses one GPU. For multi-GPU inference, expose the GPUs to
+Docker and add `--tensor-parallel-size N` to the server command.
+
+You can also edit `docker-compose.yml` for local paths and run:
+```shell
+docker compose up
+```
+
+For batch inference, override the default command with `python infer.py`.
+
+Run OCR for an image directory:
+```shell
+docker run --rm --gpus all --shm-size 16g \
+    -v "$PWD/examples/images:/data/images:ro" \
+    -v "$PWD/outputs:/app/outputs" \
+    -v "$PWD/log:/app/log" \
+    -v "$HOME/.cache/huggingface:/home/unlimited/.cache/huggingface" \
+    unlimited-ocr:local \
+    python infer.py \
+    --image_dir /data/images \
+    --output_dir /app/outputs \
+    --concurrency 8 \
+    --image_mode gundam
+```
+
+Run OCR for a PDF:
+```shell
+docker run --rm --gpus all --shm-size 16g \
+    -v "$PWD/examples/document.pdf:/data/document.pdf:ro" \
+    -v "$PWD/outputs:/app/outputs" \
+    -v "$PWD/log:/app/log" \
+    -v "$HOME/.cache/huggingface:/home/unlimited/.cache/huggingface" \
+    unlimited-ocr:local \
+    python infer.py \
+    --pdf /data/document.pdf \
+    --output_dir /app/outputs \
+    --concurrency 8 \
+    --image_mode base
+```
+
+The included GitHub Actions workflow builds images for pull requests and publishes
+images on pushes to `main`, version tags, and manual runs:
+
+- GitHub Container Registry: publishes to `ghcr.io/<owner>/<repo>` using the built-in `GITHUB_TOKEN`.
+- Docker Hub: set repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` to publish `DOCKERHUB_USERNAME/unlimited-ocr`.
 
 
 ## Visualization
