@@ -4,12 +4,19 @@ Concurrent inference via SGLang.
 Two input modes are supported:
   1. Dataset images: pass --image_dir and each image is sent as one request.
   2. PDF pages: pass --pdf and each converted page is sent as one request.
+
+Long documents are processed incrementally: each finished page is written
+atomically to --output_dir, so an interrupted or failed run can be resumed by
+re-running the same command. Pages whose output already exists are skipped
+unless --overwrite is given. A run summary (per page status, tokens, timing)
+is written to <output_dir>/manifest.json.
 """
 
 import argparse
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,6 +42,7 @@ NGRAM_WINDOW = 128
 REQUEST_TIMEOUT = 1200
 MAX_RETRIES = 5
 NO_REPEAT_NGRAM_PROCESSOR_STR = None
+MANIFEST_NAME = "manifest.json"
 
 
 def get_ngram_processor_str():
@@ -47,15 +55,14 @@ def get_ngram_processor_str():
     return NO_REPEAT_NGRAM_PROCESSOR_STR
 
 
-def pdf_to_images(pdf_path: str, dpi: int = 300) -> list[str]:
+def pdf_to_images(pdf_path: str, out_dir: str, dpi: int = 300) -> list[str]:
     import fitz
 
     doc = fitz.open(pdf_path)
-    tmp_dir = tempfile.mkdtemp(prefix="pdf_ocr_")
     image_paths = []
     mat = fitz.Matrix(dpi / 72, dpi / 72)
     for i, page in enumerate(doc):
-        out_path = os.path.join(tmp_dir, f"page_{i + 1:04d}.png")
+        out_path = os.path.join(out_dir, f"page_{i + 1:04d}.png")
         page.get_pixmap(matrix=mat).save(out_path)
         image_paths.append(out_path)
     doc.close()
@@ -72,6 +79,18 @@ def encode_image(image_path: str) -> dict:
 
 def build_content(image_path: str) -> list[dict]:
     return [{"type": "text", "text": PROMPT}, encode_image(image_path)]
+
+
+def is_completed(output_file: str) -> bool:
+    """A page counts as done only if its output file exists and is non-empty."""
+    return os.path.exists(output_file) and os.path.getsize(output_file) > 0
+
+
+def remove_partial(output_file: str) -> None:
+    try:
+        os.remove(f"{output_file}.part")
+    except OSError:
+        pass
 
 
 def server_ready(server_url: str) -> bool:
@@ -149,10 +168,14 @@ def stop_server(process):
 
 
 def collect_stream_silent(resp, output_file: str | None) -> dict:
+    """Stream the response. The output file is written atomically: deltas go to
+    a ``.part`` sibling and it is renamed into place only after the full stream
+    is consumed, so a present output file always means a complete page."""
     chunks = []
     token_count = 0
     first_token_time = None
-    f = open(output_file, "w", encoding="utf-8") if output_file else None
+    tmp_path = f"{output_file}.part" if output_file else None
+    f = open(tmp_path, "w", encoding="utf-8") if tmp_path else None
     try:
         for raw_line in resp.iter_lines():
             if not raw_line:
@@ -180,12 +203,24 @@ def collect_stream_silent(resp, output_file: str | None) -> dict:
         if f:
             f.close()
 
+    # Reached only when the stream completed without raising; promote the
+    # partial file to its final name atomically.
+    if tmp_path:
+        os.replace(tmp_path, output_file)
+
     end_time = time.time()
     decode_time = (end_time - first_token_time) if first_token_time and token_count > 1 else 0
     return {"tokens": token_count, "decode_time": decode_time, "text": "".join(chunks)}
 
 
 def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
+    name = os.path.basename(image_path)
+    base = {"image": image_path, "output": output_file}
+
+    if output_file and not args.overwrite and is_completed(output_file):
+        print(f"  [{idx}] {name}: skipped (already parsed)")
+        return {**base, "tokens": 0, "decode_time": 0, "text": "", "status": "skipped", "attempts": 0}
+
     payload = {
         "model": SERVED_MODEL_NAME,
         "messages": [{"role": "user", "content": build_content(image_path)}],
@@ -201,7 +236,6 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
             "window_size": NGRAM_WINDOW,
         }
 
-    name = os.path.basename(image_path)
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.post(
@@ -217,14 +251,16 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
             resp.raise_for_status()
             result = collect_stream_silent(resp, output_file)
             print(f"  [{idx}] {name}: {result['tokens']} tokens, {result['decode_time']:.1f}s")
-            return result
+            return {**base, **result, "status": "ok", "attempts": attempt + 1}
         except Exception as e:
             if attempt < MAX_RETRIES - 1:
                 print(f"  [{idx}] {name}: retry {attempt + 1}/{MAX_RETRIES} ({e})")
                 time.sleep(3 * (attempt + 1))
                 continue
             print(f"  [{idx}] {name}: FAILED ({e})")
-            return {"tokens": 0, "decode_time": 0, "text": ""}
+            if output_file:
+                remove_partial(output_file)
+            return {**base, "tokens": 0, "decode_time": 0, "text": "", "status": "failed", "attempts": attempt + 1}
 
 
 def collect_dataset_images(image_dir: str) -> list[str]:
@@ -237,9 +273,12 @@ def collect_dataset_images(image_dir: str) -> list[str]:
     return sorted(image_files, key=lambda f: os.path.getsize(f), reverse=True)
 
 
-def build_jobs(args) -> list[tuple[str, str | None]]:
+def build_jobs(args) -> tuple[list[tuple[str, str | None]], str | None]:
+    """Return (jobs, tmp_dir). tmp_dir is the temporary directory holding
+    rendered PDF pages (to be cleaned up by the caller), or None otherwise."""
     if args.pdf:
-        image_files = pdf_to_images(args.pdf, dpi=PDF_DPI)
+        tmp_dir = tempfile.mkdtemp(prefix="pdf_ocr_")
+        image_files = pdf_to_images(args.pdf, tmp_dir, dpi=PDF_DPI)
         prefix = os.path.splitext(os.path.basename(args.pdf))[0]
         jobs = []
         for i, image_path in enumerate(image_files):
@@ -247,7 +286,7 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
             if args.output_dir:
                 output_file = os.path.join(args.output_dir, f"{prefix}_page_{i + 1:04d}.md")
             jobs.append((image_path, output_file))
-        return jobs
+        return jobs, tmp_dir
 
     if not args.image_dir:
         raise ValueError("Either --image_dir or --pdf is required")
@@ -261,11 +300,55 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
             stem = os.path.splitext(rel)[0].replace(os.sep, "__")
             output_file = os.path.join(args.output_dir, f"{stem}.md")
         jobs.append((image_path, output_file))
-    return jobs
+    return jobs, None
+
+
+def write_manifest(args, results: list[dict], wall_time: float) -> str:
+    total_tokens = sum(r["tokens"] for r in results)
+    manifest = {
+        "model": SERVED_MODEL_NAME,
+        "image_mode": args.image_mode,
+        "wall_time_sec": round(wall_time, 2),
+        "total_tokens": total_tokens,
+        "counts": {
+            "ran": len(results),
+            "ok": sum(1 for r in results if r["status"] == "ok"),
+            "skipped": sum(1 for r in results if r["status"] == "skipped"),
+            "failed": sum(1 for r in results if r["status"] == "failed"),
+        },
+        "jobs": [
+            {k: r[k] for k in ("image", "output", "tokens", "decode_time", "status", "attempts")}
+            for r in results
+        ],
+    }
+    path = os.path.join(args.output_dir, MANIFEST_NAME)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    return path
+
+
+def report(results: list[dict], total_jobs: int, wall_time: float) -> None:
+    total_tokens = sum(r["tokens"] for r in results)
+    ok = sum(1 for r in results if r["status"] == "ok")
+    skipped = sum(1 for r in results if r["status"] == "skipped")
+    failed = sum(1 for r in results if r["status"] == "failed")
+    print(f"\n{'=' * 60}")
+    print("Concurrent Results:")
+    print(f"  Jobs ran: {len(results)}/{total_jobs} (ok={ok}, skipped={skipped}, failed={failed})")
+    print(f"  Total tokens: {total_tokens}")
+    print(f"  Wall time: {wall_time:.2f}s")
+    if wall_time > 0:
+        print(f"  System TPS: {total_tokens / wall_time:.2f} tokens/s")
+    if ok > 0:
+        avg_decode = sum(r["decode_time"] for r in results if r["status"] == "ok") / ok
+        avg_tokens = total_tokens / ok
+        print(f"  Avg tokens/request: {avg_tokens:.0f}")
+        print(f"  Avg decode_time/request: {avg_decode:.2f}s")
+    print(f"{'=' * 60}")
 
 
 def run(args):
-    jobs = build_jobs(args)
+    jobs, tmp_dir = build_jobs(args)
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
 
@@ -273,31 +356,32 @@ def run(args):
     print(f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, image_mode={args.image_mode}")
 
     wall_start = time.time()
-    results = []
-    with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
-        futures = {
-            executor.submit(infer_one, image_path, output_file, args, i + 1): image_path
-            for i, (image_path, output_file) in enumerate(jobs)
-        }
+    results: list[dict] = []
+    interrupted = False
+    executor = ThreadPoolExecutor(max_workers=args.concurrency)
+    futures = {
+        executor.submit(infer_one, image_path, output_file, args, i + 1): image_path
+        for i, (image_path, output_file) in enumerate(jobs)
+    }
+    try:
         for future in as_completed(futures):
             results.append(future.result())
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\nInterrupted — cancelling pending jobs; finished pages are saved.")
+        executor.shutdown(wait=False, cancel_futures=True)
+    finally:
+        executor.shutdown(wait=True)
+        wall_time = time.time() - wall_start
+        if args.output_dir:
+            manifest_path = write_manifest(args, results, wall_time)
+            print(f"Manifest written: {manifest_path}")
+        if tmp_dir and not args.keep_temp:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        report(results, len(jobs), wall_time)
 
-    wall_time = time.time() - wall_start
-    total_tokens = sum(r["tokens"] for r in results)
-    successful = sum(1 for r in results if r["tokens"] > 0)
-    print(f"\n{'=' * 60}")
-    print("Concurrent Results:")
-    print(f"  Requests: {successful}/{len(jobs)}")
-    print(f"  Total tokens: {total_tokens}")
-    print(f"  Wall time: {wall_time:.2f}s")
-    if wall_time > 0:
-        print(f"  System TPS: {total_tokens / wall_time:.2f} tokens/s")
-    if successful > 0:
-        avg_decode = sum(r["decode_time"] for r in results if r["tokens"] > 0) / successful
-        avg_tokens = total_tokens / successful
-        print(f"  Avg tokens/request: {avg_tokens:.0f}")
-        print(f"  Avg decode_time/request: {avg_decode:.2f}s")
-    print(f"{'=' * 60}")
+    if interrupted:
+        raise KeyboardInterrupt
 
 
 def parse_args():
@@ -313,6 +397,8 @@ def parse_args():
     parser.add_argument("--model_dir", default="baidu/Unlimited-OCR")
     parser.add_argument("--image_mode", choices=("gundam", "base"), default="gundam")
     parser.add_argument("--server_log", default="./log/sglang_server.log")
+    parser.add_argument("--overwrite", action="store_true", help="Re-run pages even if their output file already exists")
+    parser.add_argument("--keep_temp", action="store_true", help="Keep the temporary directory of rendered PDF pages")
     return parser.parse_args()
 
 
