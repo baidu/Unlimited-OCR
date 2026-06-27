@@ -37,6 +37,35 @@
 - [2026/06/23] 🤝 Thanks to the ModelScope community for their support. Our model is now available at [ModelScope](https://modelscope.cn/models/PaddlePaddle/Unlimited-OCR).
 - [2026/06/22] 🚀 We present [Unlimited-OCR](https://github.com/baidu/Unlimited-OCR), aiming to push [Deepseek-OCR](https://github.com/deepseek-ai/DeepSeek-OCR) one step further.
 
+## Prerequisites
+
+- **Python 3.12** and **CUDA 12.9** (other Python/CUDA combinations have not been tested)
+- A GPU with **at least 32 GB VRAM** for BF16 inference
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (recommended) or pip
+
+> **Warning:** This project ships a **custom SGLang wheel** in `wheel/`. Standard `pip install sglang` will **not** work — you must install the bundled wheel.
+
+---
+
+## Quick Start
+
+```shell
+git clone https://github.com/baidu/Unlimited-OCR
+cd Unlimited-OCR
+
+# Option A: install.sh (automated, uses uv)
+source install.sh
+source .venv/bin/activate
+
+# Option B: manual setup with pip
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install wheel/sglang-0.0.0.dev11416+g92e8bb79e-py3-none-any.whl
+pip install -r requirements.txt
+```
+
+---
+
 ## Inference
 
 ### Transformers
@@ -268,6 +297,33 @@ Useful options:
 --server_log ./log/sglang_server.log
 ```
 
+
+---
+
+## Docker
+
+A Dockerfile is provided for containerized deployment. It uses `nvidia/cuda:12.9.0-runtime-ubuntu24.04` and matches the tested CUDA 12.9 + Python 3.12 stack.
+
+```shell
+# Build the image
+docker build -t unlimited-ocr .
+
+# Start the SGLang server (requires NVIDIA Container Toolkit)
+docker run --gpus all -p 10000:10000 unlimited-ocr
+
+# Use a local model directory instead of downloading from Hugging Face
+docker run --gpus all -p 10000:10000 \
+    -v /path/to/local-model:/model \
+    unlimited-ocr --model /model
+
+# Batch inference with infer.py (launches server automatically)
+docker run --gpus all \
+    -v /path/to/images:/data \
+    -v /path/to/outputs:/app/outputs \
+    unlimited-ocr python infer.py --image_dir /data --output_dir /app/outputs
+```
+
+---
 
 ## Visualization
 
