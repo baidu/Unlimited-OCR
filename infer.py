@@ -6,22 +6,25 @@ Two input modes are supported:
   2. PDF pages: pass --pdf and each converted page is sent as one request.
 """
 
-import argparse
+import typer
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from PIL import Image
 import requests
+from tqdm import tqdm
 
 SERVED_MODEL_NAME = "Unlimited-OCR"
-SERVER_URL = "http://127.0.0.1:10000"
+SERVER_URL = "http://127.0.0.1:27100"
 HOST = "0.0.0.0"
-PORT = 10000
+PORT = 27100
 SERVER_TIMEOUT = 300
 PDF_DPI = 300
 ATTENTION_BACKEND = "fa3"
@@ -47,14 +50,129 @@ def get_ngram_processor_str():
     return NO_REPEAT_NGRAM_PROCESSOR_STR
 
 
+def parse_line(line: str):
+    # Matches: <|det|>tag_name [xmin, ymin, xmax, ymax]<|/det|>content
+    match = re.match(r'^<\|det\|>([a-zA-Z_0-9]+)\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]<\|/det\|>(.*)', line, re.DOTALL)
+    if match:
+        tag_name = match.group(1)
+        bbox = [int(match.group(2)), int(match.group(3)), int(match.group(4)), int(match.group(5))]
+        content = match.group(6)
+        return tag_name, bbox, content
+    return None, None, line
+
+
+def determine_title_level(text: str) -> int:
+    text_clean = text.strip()
+    # Level 1: Chapters, Appendices, References, Exercises, etc.
+    if re.match(r'^(第[0-9一二三四五六七八九十百]+[章篇]|习题|参考文献|目录|前言|序言|后记|索引|主要符号表|内容简介|附录)', text_clean):
+        return 1
+    if re.match(r'^[A-Z]\s+[\u4e00-\u9fa5]+', text_clean):
+        return 1
+        
+    # Level 2: "1.1 引言", "A.1 基本演算"
+    if re.match(r'^([A-Z]|\d+)\.\d+(\s+|$)', text_clean):
+        return 2
+        
+    # Level 3: "10.5.1 等度量映射", "C.1.1 均匀分布"
+    if re.match(r'^([A-Z]|\d+)\.\d+\.\d+(\s+|$)', text_clean):
+        return 3
+        
+    # Level 4: "10.5.1.1"
+    if re.match(r'^([A-Z]|\d+)\.\d+\.\d+\.\d+(\s+|$)', text_clean):
+        return 4
+        
+    # Lists treated as Level 4
+    if text_clean.startswith('-') or text_clean.startswith('*'):
+        return 4
+        
+    return 3
+
+
+def format_title(text: str) -> str:
+    level = determine_title_level(text)
+    text_clean = text.strip()
+    if level == 4 and (text_clean.startswith('-') or text_clean.startswith('*')):
+        text_clean = text_clean[1:].strip()
+    return "#" * level + " " + text_clean
+
+
+def convert_raw_to_markdown(raw_text: str, image_path: str, output_file: str) -> str:
+    lines = raw_text.split('\n')
+    blocks = []
+    image_counter = 0
+    
+    output_dir = os.path.dirname(os.path.abspath(output_file)) if output_file else "."
+    attachments_dir = os.path.join(output_dir, "attachments")
+    page_stem = os.path.splitext(os.path.basename(output_file))[0] if output_file else "page"
+    
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+            
+        tag_name, bbox, content_val = parse_line(line)
+        if not tag_name:
+            if line_stripped:
+                blocks.append(line_stripped)
+            continue
+            
+        content_stripped = content_val.strip()
+        
+        if tag_name == 'page_number':
+            blocks.append(f"<!-- page {content_stripped} -->")
+        elif tag_name in ('header', 'footer', 'aside_text'):
+            blocks.append(f"<!-- {tag_name}: {content_stripped} -->")
+        elif tag_name == 'title':
+            blocks.append(format_title(content_stripped))
+        elif tag_name in ('image', 'chart'):
+            crop_filename = f"{page_stem}_{tag_name}_{image_counter}.png"
+            if os.path.exists(image_path):
+                os.makedirs(attachments_dir, exist_ok=True)
+                try:
+                    with Image.open(image_path) as img:
+                        width, height = img.size
+                        xmin, ymin, xmax, ymax = bbox
+                        
+                        left = int(round(xmin * width / 1000.0))
+                        top = int(round(ymin * height / 1000.0))
+                        right = int(round(xmax * width / 1000.0))
+                        bottom = int(round(ymax * height / 1000.0))
+                        
+                        left = max(0, min(left, width - 1))
+                        top = max(0, min(top, height - 1))
+                        right = max(left + 1, min(right, width))
+                        bottom = max(top + 1, min(bottom, height))
+                        
+                        cropped = img.crop((left, top, right, bottom))
+                        cropped.save(os.path.join(attachments_dir, crop_filename))
+                        blocks.append(f"![](attachments/{crop_filename})")
+                        image_counter += 1
+                except Exception as e:
+                    print(f"Error cropping {tag_name} in {output_file}: {e}")
+                    blocks.append(f"![](attachments/{crop_filename})")
+                    image_counter += 1
+            else:
+                blocks.append(f"![](attachments/{crop_filename})")
+                image_counter += 1
+        elif tag_name in ('text', 'ref_text', 'image_caption', 'table', 'equation'):
+            if content_stripped:
+                blocks.append(content_stripped)
+        else:
+            if content_stripped:
+                blocks.append(content_stripped)
+                
+    return "\n\n".join(blocks)
+
+
 def pdf_to_images(pdf_path: str, dpi: int = 300) -> list[str]:
     import fitz
 
     doc = fitz.open(pdf_path)
+    total = len(doc)
     tmp_dir = tempfile.mkdtemp(prefix="pdf_ocr_")
     image_paths = []
     mat = fitz.Matrix(dpi / 72, dpi / 72)
-    for i, page in enumerate(doc):
+    for i, page in enumerate(tqdm(doc, total=total, desc="Converting PDF", unit="page", leave=False)):
         out_path = os.path.join(tmp_dir, f"page_{i + 1:04d}.png")
         page.get_pixmap(matrix=mat).save(out_path)
         image_paths.append(out_path)
@@ -83,9 +201,44 @@ def server_ready(server_url: str) -> bool:
 
 
 def start_server(args):
-    if server_ready(SERVER_URL):
+    global PORT, SERVER_URL
+    port = args.port
+    server_url = f"http://127.0.0.1:{port}"
+
+    if server_ready(server_url):
+        PORT = port
+        SERVER_URL = server_url
         print(f"Reuse existing SGLang server: {SERVER_URL}")
         return None
+
+    # Check if the desired port is occupied
+    import socket
+    port_is_free = False
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', port))
+        port_is_free = True
+    except OSError:
+        pass
+
+    if not port_is_free:
+        # Find the next available free port
+        new_port = port + 1
+        while new_port < 65535:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('127.0.0.1', new_port))
+                port = new_port
+                server_url = f"http://127.0.0.1:{port}"
+                print(f"Port {args.port} is occupied. Automatically switching to free port: {port}")
+                break
+            except OSError:
+                new_port += 1
+        else:
+            raise RuntimeError("No free ports available")
+
+    PORT = port
+    SERVER_URL = server_url
 
     os.makedirs(os.path.dirname(os.path.abspath(args.server_log)) or ".", exist_ok=True)
     env = os.environ.copy()
@@ -115,6 +268,9 @@ def start_server(args):
         "--port",
         str(PORT),
     ]
+    num_gpus = len(args.gpu.split(","))
+    if num_gpus > 1:
+        cmd.extend(["--tp-size", str(num_gpus)])
 
     print(f"Starting SGLang server on GPU {args.gpu}, port {PORT} ...")
     log_file = open(args.server_log, "w", encoding="utf-8")
@@ -185,9 +341,10 @@ def collect_stream_silent(resp, output_file: str | None) -> dict:
     return {"tokens": token_count, "decode_time": decode_time, "text": "".join(chunks)}
 
 
-def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
+def infer_one(image_path: str, output_file: str | None, args, idx: int, server_url: str | None = None) -> dict:
+    url = server_url or SERVER_URL
     payload = {
-        "model": SERVED_MODEL_NAME,
+        "model": args.model if hasattr(args, 'model') and args.model else SERVED_MODEL_NAME,
         "messages": [{"role": "user", "content": build_content(image_path)}],
         "temperature": TEMPERATURE,
         "skip_special_tokens": False,
@@ -205,7 +362,7 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.post(
-                f"{SERVER_URL}/v1/chat/completions",
+                f"{url}/v1/chat/completions",
                 headers={"Content-Type": "application/json"},
                 data=json.dumps(payload),
                 timeout=REQUEST_TIMEOUT,
@@ -215,7 +372,11 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
                 time.sleep(3 * (attempt + 1))
                 continue
             resp.raise_for_status()
-            result = collect_stream_silent(resp, output_file)
+            result = collect_stream_silent(resp, None)
+            if output_file:
+                formatted_text = convert_raw_to_markdown(result["text"], image_path, output_file)
+                with open(output_file, "w", encoding="utf-8") as f:
+                    f.write(formatted_text)
             print(f"  [{idx}] {name}: {result['tokens']} tokens, {result['decode_time']:.1f}s")
             return result
         except Exception as e:
@@ -264,23 +425,38 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
     return jobs
 
 
-def run(args):
+def run(args, server_url: str | None = None):
+    if args.output_dir == "./outputs":
+        if args.pdf:
+            pdf_stem = os.path.splitext(os.path.basename(args.pdf))[0]
+            args.output_dir = os.path.join("./outputs", pdf_stem)
+        elif args.image_dir:
+            image_dir_stem = os.path.basename(os.path.normpath(args.image_dir))
+            args.output_dir = os.path.join("./outputs", image_dir_stem)
+
     jobs = build_jobs(args)
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
 
     mode = "pdf_pages" if args.pdf else "dataset_images"
-    print(f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, image_mode={args.image_mode}")
+    total = len(jobs)
+    print(f"Mode: {mode}, total={total}, concurrency={args.concurrency}, image_mode={args.image_mode}")
 
     wall_start = time.time()
     results = []
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
         futures = {
-            executor.submit(infer_one, image_path, output_file, args, i + 1): image_path
+            executor.submit(infer_one, image_path, output_file, args, i + 1, server_url): image_path
             for i, (image_path, output_file) in enumerate(jobs)
         }
-        for future in as_completed(futures):
-            results.append(future.result())
+        pbar = tqdm(as_completed(futures), total=total, desc="Inferring", unit="page", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}")
+        for future in pbar:
+            result = future.result()
+            results.append(result)
+            pbar.set_postfix_str(
+                f"tokens={result['tokens']} decode={result['decode_time']:.1f}s"
+            )
+        pbar.close()
 
     wall_time = time.time() - wall_start
     total_tokens = sum(r["tokens"] for r in results)
@@ -300,30 +476,52 @@ def run(args):
     print(f"{'=' * 60}")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="SGLang concurrent inference for image datasets or PDF pages.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+app = typer.Typer()
+
+
+class ArgsNamespace:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+@app.command()
+def main(
+    image_dir: str = typer.Option("", help="Directory of images for dataset concurrency mode"),
+    pdf: str = typer.Option("", help="PDF file; each page is converted and sent as one concurrent request"),
+    output_dir: str = typer.Option("./outputs", help="Output directory for markdown and cropped images"),
+    concurrency: int = typer.Option(8, help="Concurrency limit"),
+    gpu: str = typer.Option("0", help="GPU devices"),
+    model_dir: str = typer.Option("baidu/Unlimited-OCR", help="Model directory path"),
+    image_mode: str = typer.Option("gundam", help="Image mode: gundam or base"),
+    server_log: str = typer.Option("./log/sglang_server.log", help="Log file for SGLang server"),
+    port: int = typer.Option(27100, help="SGLang server port"),
+    api_url: str = typer.Option("", help="Custom API URL (e.g. https://api.openai.com/v1). When set, no local server is started."),
+    model: str = typer.Option("", help="Model name for custom API (default: Unlimited-OCR)"),
+):
+    args = ArgsNamespace(
+        image_dir=image_dir,
+        pdf=pdf,
+        output_dir=output_dir,
+        concurrency=concurrency,
+        gpu=gpu,
+        model_dir=model_dir,
+        image_mode=image_mode,
+        server_log=server_log,
+        port=port,
+        api_url=api_url,
+        model=model,
     )
-    parser.add_argument("--image_dir", default="", help="Directory of images for dataset concurrency mode")
-    parser.add_argument("--pdf", default="", help="PDF file; each page is converted and sent as one concurrent request")
-    parser.add_argument("--output_dir", default="./outputs")
-    parser.add_argument("--concurrency", type=int, default=8)
-    parser.add_argument("--gpu", default="0")
-    parser.add_argument("--model_dir", default="baidu/Unlimited-OCR")
-    parser.add_argument("--image_mode", choices=("gundam", "base"), default="gundam")
-    parser.add_argument("--server_log", default="./log/sglang_server.log")
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    server_process = start_server(args)
-    try:
-        run(args)
-    finally:
-        stop_server(server_process)
+    if args.api_url:
+        server_url = args.api_url.rstrip("/")
+        print(f"Using custom API: {server_url}")
+        run(args, server_url=server_url)
+    else:
+        server_process = start_server(args)
+        try:
+            run(args)
+        finally:
+            stop_server(server_process)
 
 
 if __name__ == "__main__":
-    main()
+    app()
