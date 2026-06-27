@@ -19,4 +19,3 @@ requests>=2.32
 
 # SGLang (custom wheel — see README)
 sglang==0.0.0.dev11416+g92e8bb79e
-kernels==0.11.7

@@ -320,7 +320,7 @@ docker run --gpus all -p 10000:10000 \
 docker run --gpus all \
     -v /path/to/images:/data \
     -v /path/to/outputs:/app/outputs \
-    unlimited-ocr python infer.py --image-dir /data --output-dir /app/outputs
+    unlimited-ocr python infer.py --image_dir /data --output_dir /app/outputs
 ```
 
 ---

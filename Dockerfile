@@ -13,7 +13,7 @@
 #
 # Run batch inference with infer.py (launches server automatically):
 #   docker run --gpus all -v /path/to/images:/data unlimited-ocr \
-#     python infer.py --image-dir /data
+#     python infer.py --image_dir /data
 
 FROM nvidia/cuda:12.9.0-runtime-ubuntu24.04
 
@@ -41,7 +41,12 @@ RUN .venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # Copy application code last (changes most often)
 COPY infer.py .
-COPY assets/ assets/
+
+RUN groupadd --gid 1000 ocr && \
+    useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash ocr && \
+    chown -R ocr:ocr /app
+
+USER ocr
 
 ENV PATH="/app/.venv/bin:$PATH"
 
@@ -49,6 +54,7 @@ EXPOSE 10000
 
 CMD ["python", "-m", "sglang.launch_server", \
     "--model", "baidu/Unlimited-OCR", \
+    "--trust-remote-code", \
     "--served-model-name", "Unlimited-OCR", \
     "--attention-backend", "fa3", \
     "--page-size", "1", \
