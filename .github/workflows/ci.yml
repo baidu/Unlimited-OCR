@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        # Only the lightweight deps that infer.py's CPU-testable paths need.
+        # torch / transformers / sglang are not required: the tests mock the
+        # SGLang HTTP endpoint and never load the model.
+        run: |
+          python -m pip install --upgrade pip
+          pip install "requests==2.33.1" "pymupdf==1.27.2.2"
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v

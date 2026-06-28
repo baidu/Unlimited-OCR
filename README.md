@@ -272,12 +272,12 @@ python infer.py \
     --concurrency 8 \
     --image_mode gundam
 
-# PDF pages
+# PDF pages (multi-page inference supports base only)
 python infer.py \
     --pdf ./examples/document.pdf \
     --output_dir ./outputs \
     --concurrency 8 \
-    --image_mode gundam
+    --image_mode base
 ```
 
 Useful options:
@@ -285,6 +285,30 @@ Useful options:
 --model_dir baidu/Unlimited-OCR   # Local path or Hugging Face model ID
 --gpu 0                           # CUDA_VISIBLE_DEVICES value
 --server_log ./log/sglang_server.log
+--overwrite                       # Re-run pages even if their output already exists
+--keep_temp                       # Keep the temporary directory of rendered PDF pages
+```
+
+#### Resuming interrupted runs
+
+Long documents are parsed page by page and each finished page is written
+atomically to `--output_dir` (deltas stream to a `.part` file that is renamed
+into place only after the page completes). This makes batch runs resumable: if
+a run is interrupted (Ctrl-C) or some pages fail, just re-run the **same**
+command — pages whose output already exists are skipped, and only the missing
+ones are reprocessed. Pass `--overwrite` to force a full re-run.
+
+Every run writes `<output_dir>/manifest.json` summarizing each page (status —
+`ok` / `skipped` / `failed` — token count, decode time, and retry attempts), so
+failed pages can be audited and re-driven.
+
+### Tests
+
+The orchestration logic in `infer.py` is covered by unit tests that mock the
+SGLang endpoint, so they run on CPU without a GPU or the model:
+```shell
+pip install requests pymupdf
+python -m unittest discover -s tests -v
 ```
 
 
