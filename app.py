@@ -15,7 +15,13 @@ from PIL import Image
 from transformers import AutoModel, AutoTokenizer
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "baidu/Unlimited-OCR")
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# Device detection: CUDA > MPS (Apple Silicon) > CPU
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    DEVICE = "mps"
+else:
+    DEVICE = "cpu"
 
 # Lazy-loaded model and tokenizer
 _model = None
@@ -33,11 +39,13 @@ def load_model():
             MODEL_NAME,
             trust_remote_code=True,
             use_safetensors=True,
-            torch_dtype=torch.bfloat16 if DEVICE == "cuda" else torch.float32,
+            torch_dtype=torch.bfloat16 if DEVICE == "cuda" else torch.float32,  # MPS uses float32
         )
         _model = _model.eval()
         if DEVICE == "cuda":
             _model = _model.cuda()
+        elif DEVICE == "mps":
+            _model = _model.to("mps")
     return _model, _tokenizer
 
 
