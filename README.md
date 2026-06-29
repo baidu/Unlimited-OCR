@@ -146,7 +146,7 @@ docker pull vllm/vllm-openai:unlimited-ocr-cu129
 ### SGLang
 
 Set up the environment (uv-managed virtualenv). Install the local SGLang wheel first,
-then pin `kernels==0.9.0` and install PyMuPDF for PDF-to-image conversion:
+then pin `kernels==0.11.7` and install PyMuPDF for PDF-to-image conversion:
 ```shell
 uv venv --python 3.12
 source .venv/bin/activate
@@ -285,7 +285,15 @@ Useful options:
 --model_dir baidu/Unlimited-OCR   # Local path or Hugging Face model ID
 --gpu 0                           # CUDA_VISIBLE_DEVICES value
 --server_log ./log/sglang_server.log
+--ngram_size 35                   # 0 disables the no-repeat-ngram logit processor
+--ngram_window 1024               # README recommends 128 for single image, 1024 for multi-page
+--resume                          # skip images/pages whose .md already exists
+--results_jsonl ./results.jsonl   # structured per-request records
+--max_pages 5                     # PDF mode: process at most the first N pages
+--max_images 5                    # image_dir mode: process at most the first N images
 ```
+
+Note: for `--pdf` mode, `--image_mode` must be `base` (the script enforces this).
 
 
 ## Visualization
