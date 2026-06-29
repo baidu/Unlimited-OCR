@@ -146,13 +146,15 @@ docker pull vllm/vllm-openai:unlimited-ocr-cu129
 ### SGLang
 
 Set up the environment (uv-managed virtualenv). Install the local SGLang wheel first,
-then pin `kernels==0.9.0` and install PyMuPDF for PDF-to-image conversion:
+then install PyMuPDF for PDF-to-image conversion:
 ```shell
 uv venv --python 3.12
 source .venv/bin/activate
 
 uv pip install wheel/sglang-0.0.0.dev11416+g92e8bb79e-py3-none-any.whl
-uv pip install kernels==0.11.7
+# Note: do NOT install 'kernels' separately — the wheel bundles sgl_kernel at the
+# correct version.  A separate 'uv pip install kernels' will downgrade sgl_kernel
+# and cause silent import failures for the unlimited_ocr model and processor modules.
 uv pip install pymupdf==1.27.2.2
 ```
 
