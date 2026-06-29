@@ -288,6 +288,95 @@ Useful options:
 ```
 
 
+### macOS (Apple Silicon — MPS or CPU)
+
+Upstream targets NVIDIA GPUs. The model code in `modeling_unlimitedocr.py` hard-codes
+`.cuda()` on input/image tensors and wraps generation in `torch.autocast("cuda", ...)`,
+so it cannot run on a Mac as-shipped. This repo includes a small patcher that fixes
+those call sites and a Mac-friendly inference driver.
+
+Tested on: M4 Pro / 48 GB / macOS 15.6 / Python 3.12 / torch 2.12 / transformers 4.57.
+
+**Setup** (~6.7 GB model download on first run):
+
+```shell
+brew install uv                # if you don't have it
+uv venv .venv --python 3.12
+source .venv/bin/activate
+uv pip install torch torchvision "transformers==4.57.1" pillow matplotlib \
+               einops addict easydict pymupdf psutil accelerate huggingface_hub markdown
+
+python prepare_mac_model.py    # downloads baidu/Unlimited-OCR and patches it for Mac
+```
+
+`prepare_mac_model.py` creates `./model_local/` with the Python model code copied locally
+(and patched) and the `.safetensors` weights symlinked back to the HF cache so we don't
+duplicate 6.7 GB. It is idempotent — safe to re-run.
+
+The patches are minimal and explicit (see `prepare_mac_model.py`):
+
+  - `.cuda()` on input / image tensors → `.to(self.device)`
+  - `torch.autocast("cuda", dtype=torch.bfloat16)` → no-op context on non-CUDA devices
+  - hard-coded `.to(torch.bfloat16)` on image tensors → `.to(self.dtype)`
+
+**Run OCR on a PDF**:
+
+```shell
+# MPS is the default on Mac; CPU is the safest fallback.
+python infer_mac.py /path/to/file.pdf                # auto → MPS if available
+python infer_mac.py /path/to/file.pdf --device cpu
+python infer_mac.py /path/to/file.pdf --device mps --dtype bf16   # half memory, may differ numerically
+```
+
+Output goes to `./outputs/`:
+
+  - `result.md` — markdown with embedded `<table>` blocks for tabular regions
+  - `result_with_boxes.jpg` — source page with detected text-region boxes
+  - `images/` — any figure crops the model extracts
+
+To view in a browser: `python render_result.py` (converts `outputs/result.md` to a
+styled `result.html` and opens it).
+
+**Notes / caveats**:
+
+  - `--device cpu` was *faster* than `--device mps` in our single-page test (42 s vs 68 s
+    on M4 Pro). For larger / multi-page jobs MPS should pull ahead; benchmark for your case.
+  - `bf16` on MPS has known numerical issues in some older torch versions. `fp32` is the
+    safer default; M4 Pro / 48 GB handles it comfortably.
+  - `infer.py` (the SGLang batch driver) is **CUDA-only** — it launches SGLang with
+    `--attention-backend fa3` (FlashAttention 3). Use `infer_mac.py` on macOS.
+
+### Linux CPU / WSL
+
+Despite the filenames, `prepare_mac_model.py` and `infer_mac.py` are device-agnostic
+for non-CUDA targets. The same scripts run on Linux (including WSL2) in **CPU mode**
+with no code changes — `--device auto` falls back to CPU when neither MPS nor CUDA
+is available.
+
+```shell
+# Inside WSL (Ubuntu/Debian) or any Linux:
+sudo apt install python3.12 python3.12-venv     # or install uv
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install torch torchvision "transformers==4.57.1" pillow matplotlib \
+            einops addict easydict pymupdf psutil accelerate huggingface_hub markdown
+
+python prepare_mac_model.py
+python infer_mac.py /path/to.pdf --device cpu
+```
+
+WSL-specific gotchas:
+
+  - **Clone into the Linux filesystem** (`~/code/...`), not `/mnt/c/...`. The symlinks
+    that `prepare_mac_model.py` creates (weights → HF cache) work cleanly on ext4 but
+    are flaky on the 9P-mounted Windows drive.
+  - Expect single-page CPU inference to take **several minutes** on a typical x86 core —
+    the M4 Pro's ~40 s is not representative. Use a powerful CPU or fewer pages.
+  - Peak RAM: ~12.6 GB at `fp32`, ~6.3 GB at `bf16` (CPU bf16 needs an AVX-512_BF16 or
+    AMX-capable host to be fast; otherwise stick with `fp32`).
+  - If your WSL2 instance has CUDA passthrough to an NVIDIA GPU, the upstream
+    `python infer.py --pdf ...` path already supports CUDA fully — no need to use
+    `infer_mac.py`.
+
 ## Visualization
 
 <img src="assets/long-horizon-ocr.gif" width="100%" alt="Long-horizon OCR demo" />
