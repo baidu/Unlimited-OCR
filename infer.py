@@ -24,9 +24,7 @@ HOST = "0.0.0.0"
 PORT = 10000
 SERVER_TIMEOUT = 300
 PDF_DPI = 300
-ATTENTION_BACKEND = "fa3"
-PAGE_SIZE = 1
-MEM_FRACTION_STATIC = 0.8
+
 PROMPT = "document parsing."
 TEMPERATURE = 0
 CONTEXT_LENGTH = 32768
@@ -43,6 +41,7 @@ def get_ngram_processor_str():
         from sglang.srt.sampling.custom_logit_processor import (
             DeepseekOCRNoRepeatNGramLogitProcessor,
         )
+
         NO_REPEAT_NGRAM_PROCESSOR_STR = DeepseekOCRNoRepeatNGramLogitProcessor.to_str()
     return NO_REPEAT_NGRAM_PROCESSOR_STR
 
@@ -100,11 +99,11 @@ def start_server(args):
         "--served-model-name",
         SERVED_MODEL_NAME,
         "--attention-backend",
-        ATTENTION_BACKEND,
+        args.attention_backend,
         "--page-size",
-        str(PAGE_SIZE),
+        str(args.page_size),
         "--mem-fraction-static",
-        str(MEM_FRACTION_STATIC),
+        str(args.mem_fraction_static),
         "--context-length",
         str(CONTEXT_LENGTH),
         "--enable-custom-logit-processor",
@@ -160,7 +159,7 @@ def collect_stream_silent(resp, output_file: str | None) -> dict:
             line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
             if not line.startswith("data:"):
                 continue
-            data = line[len("data:"):].strip()
+            data = line[len("data:") :].strip()
             if data == "[DONE]":
                 break
             try:
@@ -181,7 +180,9 @@ def collect_stream_silent(resp, output_file: str | None) -> dict:
             f.close()
 
     end_time = time.time()
-    decode_time = (end_time - first_token_time) if first_token_time and token_count > 1 else 0
+    decode_time = (
+        (end_time - first_token_time) if first_token_time and token_count > 1 else 0
+    )
     return {"tokens": token_count, "decode_time": decode_time, "text": "".join(chunks)}
 
 
@@ -216,7 +217,9 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
                 continue
             resp.raise_for_status()
             result = collect_stream_silent(resp, output_file)
-            print(f"  [{idx}] {name}: {result['tokens']} tokens, {result['decode_time']:.1f}s")
+            print(
+                f"  [{idx}] {name}: {result['tokens']} tokens, {result['decode_time']:.1f}s"
+            )
             return result
         except Exception as e:
             if attempt < MAX_RETRIES - 1:
@@ -245,7 +248,9 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
         for i, image_path in enumerate(image_files):
             output_file = None
             if args.output_dir:
-                output_file = os.path.join(args.output_dir, f"{prefix}_page_{i + 1:04d}.md")
+                output_file = os.path.join(
+                    args.output_dir, f"{prefix}_page_{i + 1:04d}.md"
+                )
             jobs.append((image_path, output_file))
         return jobs
 
@@ -270,7 +275,9 @@ def run(args):
         os.makedirs(args.output_dir, exist_ok=True)
 
     mode = "pdf_pages" if args.pdf else "dataset_images"
-    print(f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, image_mode={args.image_mode}")
+    print(
+        f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, image_mode={args.image_mode}, attention_backend={args.attention_backend}"
+    )
 
     wall_start = time.time()
     results = []
@@ -293,7 +300,9 @@ def run(args):
     if wall_time > 0:
         print(f"  System TPS: {total_tokens / wall_time:.2f} tokens/s")
     if successful > 0:
-        avg_decode = sum(r["decode_time"] for r in results if r["tokens"] > 0) / successful
+        avg_decode = (
+            sum(r["decode_time"] for r in results if r["tokens"] > 0) / successful
+        )
         avg_tokens = total_tokens / successful
         print(f"  Avg tokens/request: {avg_tokens:.0f}")
         print(f"  Avg decode_time/request: {avg_decode:.2f}s")
@@ -305,13 +314,34 @@ def parse_args():
         description="SGLang concurrent inference for image datasets or PDF pages.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--image_dir", default="", help="Directory of images for dataset concurrency mode")
-    parser.add_argument("--pdf", default="", help="PDF file; each page is converted and sent as one concurrent request")
+    parser.add_argument(
+        "--image_dir",
+        default="",
+        help="Directory of images for dataset concurrency mode",
+    )
+    parser.add_argument(
+        "--pdf",
+        default="",
+        help="PDF file; each page is converted and sent as one concurrent request",
+    )
     parser.add_argument("--output_dir", default="./outputs")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--model_dir", default="baidu/Unlimited-OCR")
     parser.add_argument("--image_mode", choices=("gundam", "base"), default="gundam")
+    parser.add_argument(
+        "--attention_backend",
+        default="fa3",
+        choices=("fa3", "flashinfer", "triton", "fa4", "flashmla", "cutlass"),
+        help="Attention backend for SGLang. Use 'flashinfer' or 'triton' for non-Hopper GPUs (e.g. RTX 4090).",
+    )
+    parser.add_argument("--page_size", type=int, default=1, help="SGLang page size")
+    parser.add_argument(
+        "--mem_fraction_static",
+        type=float,
+        default=0.8,
+        help="SGLang static memory fraction",
+    )
     parser.add_argument("--server_log", default="./log/sglang_server.log")
     return parser.parse_args()
 
