@@ -277,7 +277,7 @@ python infer.py \
     --pdf ./examples/document.pdf \
     --output_dir ./outputs \
     --concurrency 8 \
-    --image_mode gundam
+    --image_mode base
 ```
 
 Useful options:
@@ -285,7 +285,15 @@ Useful options:
 --model_dir baidu/Unlimited-OCR   # Local path or Hugging Face model ID
 --gpu 0                           # CUDA_VISIBLE_DEVICES value
 --server_log ./log/sglang_server.log
+--prompt "document parsing."       # Prompt sent with each image or PDF page
+--pdf_dpi 300                      # DPI for converting PDF pages to images
+--ngram_window 128                 # Use 1024 by default for PDF, 128 for images
 ```
+
+When `--image_mode`, `--prompt`, or `--ngram_window` are omitted, `infer.py`
+selects defaults based on the input type: image directories use `gundam`,
+`document parsing.`, and a 128-token n-gram window; PDF inputs use `base`,
+`Multi page parsing.`, and a 1024-token n-gram window.
 
 
 ## Visualization
