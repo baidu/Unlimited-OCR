@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -23,18 +24,20 @@ SERVER_URL = "http://127.0.0.1:10000"
 HOST = "0.0.0.0"
 PORT = 10000
 SERVER_TIMEOUT = 300
-PDF_DPI = 300
 ATTENTION_BACKEND = "fa3"
 PAGE_SIZE = 1
 MEM_FRACTION_STATIC = 0.8
-PROMPT = "document parsing."
 TEMPERATURE = 0
 CONTEXT_LENGTH = 32768
 NO_REPEAT_NGRAM_SIZE = 35
-NGRAM_WINDOW = 128
 REQUEST_TIMEOUT = 1200
 MAX_RETRIES = 5
 NO_REPEAT_NGRAM_PROCESSOR_STR = None
+DEFAULT_PROMPT = "document parsing."
+DEFAULT_PDF_PROMPT = "Multi page parsing."
+DEFAULT_IMAGE_NGRAM_WINDOW = 128
+DEFAULT_PDF_NGRAM_WINDOW = 1024
+THREAD_LOCAL = threading.local()
 
 
 def get_ngram_processor_str():
@@ -45,6 +48,14 @@ def get_ngram_processor_str():
         )
         NO_REPEAT_NGRAM_PROCESSOR_STR = DeepseekOCRNoRepeatNGramLogitProcessor.to_str()
     return NO_REPEAT_NGRAM_PROCESSOR_STR
+
+
+def get_session() -> requests.Session:
+    if not hasattr(THREAD_LOCAL, "session"):
+        session = requests.Session()
+        session.trust_env = False
+        THREAD_LOCAL.session = session
+    return THREAD_LOCAL.session
 
 
 def pdf_to_images(pdf_path: str, dpi: int = 300) -> list[str]:
@@ -70,13 +81,13 @@ def encode_image(image_path: str) -> dict:
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}}
 
 
-def build_content(image_path: str) -> list[dict]:
-    return [{"type": "text", "text": PROMPT}, encode_image(image_path)]
+def build_content(image_path: str, prompt: str) -> list[dict]:
+    return [{"type": "text", "text": prompt}, encode_image(image_path)]
 
 
 def server_ready(server_url: str) -> bool:
     try:
-        resp = requests.get(f"{server_url}/health", timeout=5)
+        resp = get_session().get(f"{server_url}/health", timeout=5)
         return resp.status_code == 200
     except requests.RequestException:
         return False
@@ -188,27 +199,27 @@ def collect_stream_silent(resp, output_file: str | None) -> dict:
 def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
     payload = {
         "model": SERVED_MODEL_NAME,
-        "messages": [{"role": "user", "content": build_content(image_path)}],
+        "messages": [{"role": "user", "content": build_content(image_path, args.prompt)}],
         "temperature": TEMPERATURE,
         "skip_special_tokens": False,
         "stream": True,
         "images_config": {"image_mode": args.image_mode},
     }
-    if NO_REPEAT_NGRAM_SIZE > 0 and NGRAM_WINDOW > 0:
+    if args.no_repeat_ngram_size > 0 and args.ngram_window > 0:
         payload["custom_logit_processor"] = get_ngram_processor_str()
         payload["custom_params"] = {
-            "ngram_size": NO_REPEAT_NGRAM_SIZE,
-            "window_size": NGRAM_WINDOW,
+            "ngram_size": args.no_repeat_ngram_size,
+            "window_size": args.ngram_window,
         }
 
     name = os.path.basename(image_path)
     for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.post(
+            resp = get_session().post(
                 f"{SERVER_URL}/v1/chat/completions",
                 headers={"Content-Type": "application/json"},
                 data=json.dumps(payload),
-                timeout=REQUEST_TIMEOUT,
+                timeout=args.request_timeout,
                 stream=True,
             )
             if resp.status_code == 502 and attempt < MAX_RETRIES - 1:
@@ -239,7 +250,7 @@ def collect_dataset_images(image_dir: str) -> list[str]:
 
 def build_jobs(args) -> list[tuple[str, str | None]]:
     if args.pdf:
-        image_files = pdf_to_images(args.pdf, dpi=PDF_DPI)
+        image_files = pdf_to_images(args.pdf, dpi=args.pdf_dpi)
         prefix = os.path.splitext(os.path.basename(args.pdf))[0]
         jobs = []
         for i, image_path in enumerate(image_files):
@@ -264,13 +275,38 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
     return jobs
 
 
-def run(args):
-    jobs = build_jobs(args)
+def filter_jobs(args, jobs: list[tuple[str, str | None]]) -> tuple[list[tuple[str, str | None]], int]:
+    if not args.skip_existing:
+        return jobs, 0
+
+    pending = []
+    skipped = 0
+    for image_path, output_file in jobs:
+        has_existing_output = (
+            output_file is not None
+            and os.path.exists(output_file)
+            and os.path.getsize(output_file) > 0
+        )
+        if has_existing_output:
+            skipped += 1
+            continue
+        pending.append((image_path, output_file))
+    return pending, skipped
+
+
+def run(args, jobs: list[tuple[str, str | None]], skipped: int):
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
 
     mode = "pdf_pages" if args.pdf else "dataset_images"
-    print(f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, image_mode={args.image_mode}")
+    print(
+        f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, "
+        f"image_mode={args.image_mode}, ngram_window={args.ngram_window}, skipped={skipped}"
+    )
+
+    if not jobs:
+        print("No pending requests.")
+        return
 
     wall_start = time.time()
     results = []
@@ -311,16 +347,60 @@ def parse_args():
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--model_dir", default="baidu/Unlimited-OCR")
-    parser.add_argument("--image_mode", choices=("gundam", "base"), default="gundam")
+    parser.add_argument(
+        "--image_mode",
+        choices=("gundam", "base"),
+        default=None,
+        help="Image encoding mode. Defaults to gundam for image_dir and base for PDF.",
+    )
+    parser.add_argument("--prompt", default=None, help="Prompt sent with each image or PDF page")
+    parser.add_argument("--pdf_dpi", type=int, default=300, help="DPI used when converting PDF pages")
+    parser.add_argument("--no_repeat_ngram_size", type=int, default=NO_REPEAT_NGRAM_SIZE)
+    parser.add_argument(
+        "--ngram_window",
+        type=int,
+        default=None,
+        help="No-repeat n-gram window. Defaults to 128 for image_dir and 1024 for PDF.",
+    )
+    parser.add_argument("--request_timeout", type=int, default=REQUEST_TIMEOUT)
+    parser.add_argument(
+        "--skip_existing",
+        action="store_true",
+        help="Skip inputs whose output markdown file already exists and is non-empty.",
+    )
     parser.add_argument("--server_log", default="./log/sglang_server.log")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.concurrency < 1:
+        parser.error("--concurrency must be at least 1")
+    if args.pdf_dpi < 1:
+        parser.error("--pdf_dpi must be at least 1")
+    if args.image_dir and args.pdf:
+        parser.error("Use either --image_dir or --pdf, not both")
+    if not args.image_dir and not args.pdf:
+        parser.error("Either --image_dir or --pdf is required")
+
+    is_pdf = bool(args.pdf)
+    if args.image_mode is None:
+        args.image_mode = "base" if is_pdf else "gundam"
+    if args.prompt is None:
+        args.prompt = DEFAULT_PDF_PROMPT if is_pdf else DEFAULT_PROMPT
+    if args.ngram_window is None:
+        args.ngram_window = DEFAULT_PDF_NGRAM_WINDOW if is_pdf else DEFAULT_IMAGE_NGRAM_WINDOW
+
+    return args
 
 
 def main():
     args = parse_args()
+    jobs, skipped = filter_jobs(args, build_jobs(args))
+    if not jobs:
+        run(args, jobs, skipped)
+        return
+
     server_process = start_server(args)
     try:
-        run(args)
+        run(args, jobs, skipped)
     finally:
         stop_server(server_process)
 

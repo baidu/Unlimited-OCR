@@ -270,14 +270,15 @@ python infer.py \
     --image_dir ./examples/images \
     --output_dir ./outputs \
     --concurrency 8 \
-    --image_mode gundam
+    --image_mode gundam \
+    --skip_existing
 
 # PDF pages
 python infer.py \
     --pdf ./examples/document.pdf \
     --output_dir ./outputs \
     --concurrency 8 \
-    --image_mode gundam
+    --image_mode base
 ```
 
 Useful options:
@@ -285,7 +286,22 @@ Useful options:
 --model_dir baidu/Unlimited-OCR   # Local path or Hugging Face model ID
 --gpu 0                           # CUDA_VISIBLE_DEVICES value
 --server_log ./log/sglang_server.log
+--prompt "document parsing."       # Prompt sent with each image or PDF page
+--pdf_dpi 300                      # DPI for converting PDF pages to images
+--ngram_window 128                 # Use 1024 by default for PDF, 128 for images
+--skip_existing                    # Resume large runs by skipping non-empty outputs
 ```
+
+When `--image_mode`, `--prompt`, or `--ngram_window` are omitted, `infer.py`
+selects defaults based on the input type: image directories use `gundam`,
+`document parsing.`, and a 128-token n-gram window; PDF inputs use `base`,
+`Multi page parsing.`, and a 1024-token n-gram window.
+
+For large datasets, `infer.py` reuses one HTTP session per worker thread and
+disables environment proxy lookup for those local SGLang requests. This reduces
+per-request overhead during high-concurrency runs. Add `--skip_existing` to
+resume interrupted jobs without sending requests for images or PDF pages whose
+markdown outputs already exist and are non-empty.
 
 
 ## Visualization
