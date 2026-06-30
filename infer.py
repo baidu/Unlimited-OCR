@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -36,6 +37,7 @@ DEFAULT_PROMPT = "document parsing."
 DEFAULT_PDF_PROMPT = "Multi page parsing."
 DEFAULT_IMAGE_NGRAM_WINDOW = 128
 DEFAULT_PDF_NGRAM_WINDOW = 1024
+THREAD_LOCAL = threading.local()
 
 
 def get_ngram_processor_str():
@@ -46,6 +48,14 @@ def get_ngram_processor_str():
         )
         NO_REPEAT_NGRAM_PROCESSOR_STR = DeepseekOCRNoRepeatNGramLogitProcessor.to_str()
     return NO_REPEAT_NGRAM_PROCESSOR_STR
+
+
+def get_session() -> requests.Session:
+    if not hasattr(THREAD_LOCAL, "session"):
+        session = requests.Session()
+        session.trust_env = False
+        THREAD_LOCAL.session = session
+    return THREAD_LOCAL.session
 
 
 def pdf_to_images(pdf_path: str, dpi: int = 300) -> list[str]:
@@ -77,7 +87,7 @@ def build_content(image_path: str, prompt: str) -> list[dict]:
 
 def server_ready(server_url: str) -> bool:
     try:
-        resp = requests.get(f"{server_url}/health", timeout=5)
+        resp = get_session().get(f"{server_url}/health", timeout=5)
         return resp.status_code == 200
     except requests.RequestException:
         return False
@@ -205,7 +215,7 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
     name = os.path.basename(image_path)
     for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.post(
+            resp = get_session().post(
                 f"{SERVER_URL}/v1/chat/completions",
                 headers={"Content-Type": "application/json"},
                 data=json.dumps(payload),
@@ -265,16 +275,38 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
     return jobs
 
 
-def run(args):
-    jobs = build_jobs(args)
+def filter_jobs(args, jobs: list[tuple[str, str | None]]) -> tuple[list[tuple[str, str | None]], int]:
+    if not args.skip_existing:
+        return jobs, 0
+
+    pending = []
+    skipped = 0
+    for image_path, output_file in jobs:
+        has_existing_output = (
+            output_file is not None
+            and os.path.exists(output_file)
+            and os.path.getsize(output_file) > 0
+        )
+        if has_existing_output:
+            skipped += 1
+            continue
+        pending.append((image_path, output_file))
+    return pending, skipped
+
+
+def run(args, jobs: list[tuple[str, str | None]], skipped: int):
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
 
     mode = "pdf_pages" if args.pdf else "dataset_images"
     print(
         f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, "
-        f"image_mode={args.image_mode}, ngram_window={args.ngram_window}"
+        f"image_mode={args.image_mode}, ngram_window={args.ngram_window}, skipped={skipped}"
     )
+
+    if not jobs:
+        print("No pending requests.")
+        return
 
     wall_start = time.time()
     results = []
@@ -331,6 +363,11 @@ def parse_args():
         help="No-repeat n-gram window. Defaults to 128 for image_dir and 1024 for PDF.",
     )
     parser.add_argument("--request_timeout", type=int, default=REQUEST_TIMEOUT)
+    parser.add_argument(
+        "--skip_existing",
+        action="store_true",
+        help="Skip inputs whose output markdown file already exists and is non-empty.",
+    )
     parser.add_argument("--server_log", default="./log/sglang_server.log")
     args = parser.parse_args()
 
@@ -356,9 +393,14 @@ def parse_args():
 
 def main():
     args = parse_args()
+    jobs, skipped = filter_jobs(args, build_jobs(args))
+    if not jobs:
+        run(args, jobs, skipped)
+        return
+
     server_process = start_server(args)
     try:
-        run(args)
+        run(args, jobs, skipped)
     finally:
         stop_server(server_process)
 
