@@ -344,3 +344,21 @@ We would like to thank [Deepseek-OCR](https://github.com/deepseek-ai/DeepSeek-OC
       primaryClass={cs.CV},
       url={https://arxiv.org/abs/2606.23050}, 
 }
+
+## Local inference with Transformers (CUDA / Apple Silicon / CPU)
+
+The SGLang path above requires CUDA. To run the model locally without a CUDA
+GPU (for example on an Apple Silicon Mac), use the Transformers-based path:
+
+```shell
+hf download baidu/Unlimited-OCR --local-dir ./Unlimited-OCR-local
+python patch_model_for_local.py ./Unlimited-OCR-local
+python infer_transformers.py --model_dir ./Unlimited-OCR-local \
+    --image_dir ./my_pages --output_dir ./outputs
+```
+
+The patch step is required: the released modeling file hardcodes CUDA calls,
+and on the MPS backend the image-embedding injection must use positional
+assignment instead of `masked_scatter_`, which silently corrupts the visual
+tokens there (the model then returns empty output with no error). The patch
+asserts on the exact released code and is a behavioral no-op on CUDA.
