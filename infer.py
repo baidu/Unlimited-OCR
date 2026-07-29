@@ -126,6 +126,7 @@ def start_server(args):
     while time.time() - start < SERVER_TIMEOUT:
         if process.poll() is not None:
             log_file.flush()
+            log_file.close()
             raise RuntimeError(f"SGLang server exited early. Check {args.server_log}")
         if server_ready(SERVER_URL):
             print(f"Server ready ({time.time() - start:.0f}s)")
@@ -212,6 +213,7 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
                 stream=True,
             )
             if resp.status_code == 502 and attempt < MAX_RETRIES - 1:
+                resp.close()
                 time.sleep(3 * (attempt + 1))
                 continue
             resp.raise_for_status()
