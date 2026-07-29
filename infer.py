@@ -12,6 +12,8 @@ import json
 import os
 import subprocess
 import sys
+import atexit
+import shutil
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -52,6 +54,10 @@ def pdf_to_images(pdf_path: str, dpi: int = 300) -> list[str]:
 
     doc = fitz.open(pdf_path)
     tmp_dir = tempfile.mkdtemp(prefix="pdf_ocr_")
+    # Register cleanup so the temp PNG directory is removed when the process exits,
+    # even on exception.  A 100-page PDF at 300 DPI produces 400-600 MB in /tmp;
+    # without this, repeated runs fill disk silently.
+    atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
     image_paths = []
     mat = fitz.Matrix(dpi / 72, dpi / 72)
     for i, page in enumerate(doc):
