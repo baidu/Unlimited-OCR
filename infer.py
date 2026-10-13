@@ -32,6 +32,7 @@ TEMPERATURE = 0
 CONTEXT_LENGTH = 32768
 NO_REPEAT_NGRAM_SIZE = 35
 NGRAM_WINDOW = 128
+REPETITION_PENALTY = 1.0
 REQUEST_TIMEOUT = 1200
 MAX_RETRIES = 5
 NO_REPEAT_NGRAM_PROCESSOR_STR = None
@@ -194,11 +195,15 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
         "stream": True,
         "images_config": {"image_mode": args.image_mode},
     }
-    if NO_REPEAT_NGRAM_SIZE > 0 and NGRAM_WINDOW > 0:
+    if getattr(args, "repetition_penalty", REPETITION_PENALTY) > 1.0:
+        payload["repetition_penalty"] = args.repetition_penalty
+    ngram_size = getattr(args, "no_repeat_ngram_size", NO_REPEAT_NGRAM_SIZE)
+    window_size = getattr(args, "ngram_window", NGRAM_WINDOW)
+    if ngram_size > 0 and window_size > 0:
         payload["custom_logit_processor"] = get_ngram_processor_str()
         payload["custom_params"] = {
-            "ngram_size": NO_REPEAT_NGRAM_SIZE,
-            "window_size": NGRAM_WINDOW,
+            "ngram_size": ngram_size,
+            "window_size": window_size,
         }
 
     name = os.path.basename(image_path)
@@ -312,6 +317,9 @@ def parse_args():
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--model_dir", default="baidu/Unlimited-OCR")
     parser.add_argument("--image_mode", choices=("gundam", "base"), default="gundam")
+    parser.add_argument("--no_repeat_ngram_size", type=int, default=35, help="N-gram size to ban repeated sequences (0 to disable)")
+    parser.add_argument("--ngram_window", type=int, default=128, help="Sliding window size for n-gram repetition blocking")
+    parser.add_argument("--repetition_penalty", type=float, default=1.0, help="Repetition penalty factor to prevent text looping (>1.0 to enable)")
     parser.add_argument("--server_log", default="./log/sglang_server.log")
     return parser.parse_args()
 

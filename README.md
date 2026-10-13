@@ -290,8 +290,14 @@ Useful options:
 ```shell
 --model_dir baidu/Unlimited-OCR   # Local path or Hugging Face model ID
 --gpu 0                           # CUDA_VISIBLE_DEVICES value
+--repetition_penalty 1.1          # Repetition penalty factor to prevent text looping (>1.0 to enable)
+--no_repeat_ngram_size 35         # N-gram size to ban repeated sequences (0 to disable)
+--ngram_window 128                # Sliding window size for n-gram repetition blocking
 --server_log ./log/sglang_server.log
 ```
+
+> **Preventing Text Repetition Loops:**
+> On certain dense or structured document pages, short text phrases may repeat endlessly. Pass `--repetition_penalty 1.1` in `infer.py` or set `repetition_penalty=1.1` in `model.generate()` to prevent repetition loops. You can also tune `no_repeat_ngram_size` (e.g. `15`-`35`) to detect shorter repeating units.
 
 For OmniDocBench evaluation, you need to perform the following post-processing.
 ```python
