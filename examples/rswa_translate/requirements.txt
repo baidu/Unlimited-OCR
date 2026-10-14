@@ -1,0 +1,6 @@
+torch>=2.10.0
+transformers>=4.57.1
+Pillow>=10.0.0
+einops>=0.8.0
+addict>=2.4.0
+easydict>=1.13

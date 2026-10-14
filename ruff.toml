@@ -1,0 +1,3 @@
+# Ruff 配置：ML 项目通用行宽 100（ruff 默认 88，PEP8 工具事实标准）。
+line-length = 100
+target-version = "py312"
