@@ -230,14 +230,48 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
 def collect_dataset_images(image_dir: str) -> list[str]:
     exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
     image_files = []
-    for root, _, files in os.walk(image_dir):
+
+    def raise_walk_error(error: OSError) -> None:
+        raise error
+
+    for root, _, files in os.walk(image_dir, onerror=raise_walk_error):
         for name in files:
             if name.lower().endswith(exts):
                 image_files.append(os.path.join(root, name))
     return sorted(image_files, key=lambda f: os.path.getsize(f), reverse=True)
 
 
-def build_jobs(args) -> list[tuple[str, str | None]]:
+def validate_inputs(args) -> list[str] | None:
+    """Fail on invalid input paths before starting the model server."""
+    if args.pdf:
+        if not os.path.isfile(args.pdf):
+            raise FileNotFoundError(f"PDF file does not exist or is not a file: {args.pdf}")
+        try:
+            import fitz
+
+            document = fitz.open(args.pdf)
+            try:
+                if document.page_count == 0:
+                    raise ValueError(f"PDF file contains no pages: {args.pdf}")
+            finally:
+                document.close()
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            raise ValueError(f"Unable to read PDF file {args.pdf}: {error}") from error
+        return None
+
+    if not args.image_dir:
+        raise ValueError("Either --image_dir or --pdf is required")
+    if not os.path.isdir(args.image_dir):
+        raise NotADirectoryError(f"Image directory does not exist or is not a directory: {args.image_dir}")
+
+    image_files = collect_dataset_images(args.image_dir)
+    for image_path in image_files:
+        with open(image_path, "rb"):
+            pass
+    return image_files
+
+
+def build_jobs(args, image_files: list[str] | None = None) -> list[tuple[str, str | None]]:
     if args.pdf:
         image_files = pdf_to_images(args.pdf, dpi=PDF_DPI)
         prefix = os.path.splitext(os.path.basename(args.pdf))[0]
@@ -251,7 +285,8 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
 
     if not args.image_dir:
         raise ValueError("Either --image_dir or --pdf is required")
-    image_files = collect_dataset_images(args.image_dir)
+    if image_files is None:
+        image_files = collect_dataset_images(args.image_dir)
 
     jobs = []
     for image_path in image_files:
@@ -264,8 +299,8 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
     return jobs
 
 
-def run(args):
-    jobs = build_jobs(args)
+def run(args, image_files: list[str] | None = None):
+    jobs = build_jobs(args, image_files)
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
 
@@ -305,8 +340,13 @@ def parse_args():
         description="SGLang concurrent inference for image datasets or PDF pages.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--image_dir", default="", help="Directory of images for dataset concurrency mode")
-    parser.add_argument("--pdf", default="", help="PDF file; each page is converted and sent as one concurrent request")
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
+        "--image_dir", default="", help="Directory of images for dataset concurrency mode"
+    )
+    input_group.add_argument(
+        "--pdf", default="", help="PDF file; each page is converted and sent as one concurrent request"
+    )
     parser.add_argument("--output_dir", default="./outputs")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--gpu", default="0")
@@ -318,9 +358,14 @@ def parse_args():
 
 def main():
     args = parse_args()
+    try:
+        image_files = validate_inputs(args)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"Input validation failed: {error}") from error
+
     server_process = start_server(args)
     try:
-        run(args)
+        run(args, image_files)
     finally:
         stop_server(server_process)
 
