@@ -311,9 +311,19 @@ def parse_args():
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--model_dir", default="baidu/Unlimited-OCR")
-    parser.add_argument("--image_mode", choices=("gundam", "base"), default="gundam")
+    parser.add_argument(
+        "--image_mode",
+        choices=("gundam", "base"),
+        default=None,
+        help="Image mode. Defaults to gundam for image directories and base for PDFs.",
+    )
     parser.add_argument("--server_log", default="./log/sglang_server.log")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.image_mode is None:
+        args.image_mode = "base" if args.pdf else "gundam"
+    elif args.pdf and args.image_mode != "base":
+        parser.error("--pdf only supports --image_mode base")
+    return args
 
 
 def main():
