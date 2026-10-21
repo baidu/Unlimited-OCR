@@ -217,14 +217,14 @@ def infer_one(image_path: str, output_file: str | None, args, idx: int) -> dict:
             resp.raise_for_status()
             result = collect_stream_silent(resp, output_file)
             print(f"  [{idx}] {name}: {result['tokens']} tokens, {result['decode_time']:.1f}s")
-            return result
+            return {"success": True, **result}
         except Exception as e:
             if attempt < MAX_RETRIES - 1:
                 print(f"  [{idx}] {name}: retry {attempt + 1}/{MAX_RETRIES} ({e})")
                 time.sleep(3 * (attempt + 1))
                 continue
             print(f"  [{idx}] {name}: FAILED ({e})")
-            return {"tokens": 0, "decode_time": 0, "text": ""}
+            return {"success": False, "tokens": 0, "decode_time": 0, "text": ""}
 
 
 def collect_dataset_images(image_dir: str) -> list[str]:
@@ -239,9 +239,13 @@ def collect_dataset_images(image_dir: str) -> list[str]:
 
 def build_jobs(args) -> list[tuple[str, str | None]]:
     if args.pdf:
+        if not os.path.isfile(args.pdf):
+            raise ValueError(f"PDF file not found: {args.pdf}")
         image_files = pdf_to_images(args.pdf, dpi=PDF_DPI)
         prefix = os.path.splitext(os.path.basename(args.pdf))[0]
         jobs = []
+        if not image_files:
+            raise ValueError(f"PDF contains no pages: {args.pdf}")
         for i, image_path in enumerate(image_files):
             output_file = None
             if args.output_dir:
@@ -251,7 +255,11 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
 
     if not args.image_dir:
         raise ValueError("Either --image_dir or --pdf is required")
+    if not os.path.isdir(args.image_dir):
+        raise ValueError(f"Image directory not found: {args.image_dir}")
     image_files = collect_dataset_images(args.image_dir)
+    if not image_files:
+        raise ValueError(f"No supported images found in: {args.image_dir}")
 
     jobs = []
     for image_path in image_files:
@@ -264,8 +272,7 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
     return jobs
 
 
-def run(args):
-    jobs = build_jobs(args)
+def run(args, jobs: list[tuple[str, str | None]]) -> int:
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
 
@@ -284,7 +291,7 @@ def run(args):
 
     wall_time = time.time() - wall_start
     total_tokens = sum(r["tokens"] for r in results)
-    successful = sum(1 for r in results if r["tokens"] > 0)
+    successful = sum(1 for r in results if r["success"])
     print(f"\n{'=' * 60}")
     print("Concurrent Results:")
     print(f"  Requests: {successful}/{len(jobs)}")
@@ -298,6 +305,7 @@ def run(args):
         print(f"  Avg tokens/request: {avg_tokens:.0f}")
         print(f"  Avg decode_time/request: {avg_decode:.2f}s")
     print(f"{'=' * 60}")
+    return 0 if successful == len(jobs) else 1
 
 
 def parse_args():
@@ -316,14 +324,20 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main() -> int:
     args = parse_args()
+    try:
+        jobs = build_jobs(args)
+    except ValueError as exc:
+        print(f"Input error: {exc}", file=sys.stderr)
+        return 2
+
     server_process = start_server(args)
     try:
-        run(args)
+        return run(args, jobs)
     finally:
         stop_server(server_process)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
