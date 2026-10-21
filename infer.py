@@ -258,7 +258,7 @@ def build_jobs(args) -> list[tuple[str, str | None]]:
         output_file = None
         if args.output_dir:
             rel = os.path.relpath(image_path, args.image_dir)
-            stem = os.path.splitext(rel)[0].replace(os.sep, "__")
+            stem = os.path.splitext(rel)[0]
             output_file = os.path.join(args.output_dir, f"{stem}.md")
         jobs.append((image_path, output_file))
     return jobs
@@ -268,6 +268,9 @@ def run(args):
     jobs = build_jobs(args)
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
+    for _, output_file in jobs:
+        if output_file:
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     mode = "pdf_pages" if args.pdf else "dataset_images"
     print(f"Mode: {mode}, requests={len(jobs)}, concurrency={args.concurrency}, image_mode={args.image_mode}")
