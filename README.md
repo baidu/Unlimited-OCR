@@ -298,6 +298,39 @@ Unlimited-horizon parsing in action: a full-length book parsed in a single reque
 
 </div>
 
+## Apple Silicon (Mac) Support / Mac Apple Silicon 适配
+
+The official deployment paths (Transformers / vLLM / SGLang) require **NVIDIA CUDA 12.9+**. A community-maintained Mac Apple Silicon adaptation is available in the [`mac/`](mac/) directory of this repo, with a [standalone repo](https://github.com/Konsn666/unlimited-ocr-mac) for ongoing development.
+
+官方部署路径(Transformers / vLLM / SGLang)需要 **NVIDIA CUDA 12.9+**。社区维护的 Mac Apple Silicon 适配在 [`mac/`](mac/) 目录,持续开发在 [独立仓库](https://github.com/Konsn666/unlimited-ocr-mac)。
+
+### Quick start / 快速开始
+
+```bash
+cd mac/
+bash scripts/install.sh          # 5-10 min (downloads 6.7GB model)
+bash scripts/run.sh your.png     # run OCR
+```
+
+### Tested on / 实测环境
+
+| Hardware | Time per document |
+|---|---|
+| M4 Pro 48GB | ~20s (13-line complex doc) |
+| M4 Pro 48GB | ~9s (simple image) |
+
+### Key patches (3) / 三个关键 patch
+
+1. **`.cuda()` → `.to('mps')`** — 13+ hardcoded CUDA calls in `modeling_unlimitedocr.py`
+2. **Disable `torch.autocast`** — PyTorch MPS backend has a bug with autocast that causes MLA+MoE logits to drift
+3. **`SlidingWindowNoRepeatNgramProcessor` inherit from `LogitsProcessor`** — required by transformers 4.57+
+
+See [`mac/README.md`](mac/README.md) for full details, benchmarks, and MCP server setup (works with Claude Code / OpenAI Codex CLI).
+
+详见 [`mac/README.md`](mac/README.md) — 含完整基准测试 + MCP 服务配置(支持 Claude Code / OpenAI Codex CLI 调用)。
+
+> **Note**: Mac streaming output is currently disabled due to a PyTorch MPS "Placeholder storage" bug. The default `eval_mode=True` path returns the full string at once and works perfectly.
+
 ## Acknowledgement
 
 We would like to thank [Deepseek-OCR](https://github.com/deepseek-ai/DeepSeek-OCR), [Deepseek-OCR-2](https://github.com/deepseek-ai/DeepSeek-OCR-2), [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) for their valuable models and ideas, and [SGLang](https://github.com/sgl-project/sglang) for the serving framework.
