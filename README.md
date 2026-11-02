@@ -28,7 +28,7 @@
   <a href="https://arxiv.org/abs/2606.23050">
     <img alt="arXiv" src="https://img.shields.io/badge/arXiv-Unlimited OCR Works-b31b1b?logo=arxiv&logoColor=white" />
   </a>
-    <a href="https://github.com/baidu/Unlimited-OCR/blob/main/Unlimited-OCR-2.pdf">
+    <a href="https://arxiv.org/abs/2610.39308">
     <img alt="arXiv" src="https://img.shields.io/badge/arXiv-Unlimited OCR Works 2-b31b1b?logo=arxiv&logoColor=white" />
   </a>
   <a href="https://x.com/Baidu_Inc" target="_blank">
@@ -46,6 +46,7 @@
 
 
 ## Release
+- [2026/11/02] 📄 The paper of **Unlimited OCR 2** is now available on [arXiv](https://arxiv.org/abs/2610.39308).
 - [2026/10/28] Thanks to the [ms-swift community](https://github.com/modelscope/ms-swift) for supporting training of **Unlimited OCR 2**.
 - [2026/10/27] 📊 We release [**MarathonDocBench**](https://huggingface.co/datasets/baidu/MarathonDocBench), a new benchmark for ultra-long document parsing.
 - [2026/10/27] 🤝 Thanks to the [ModelScope community](https://github.com/modelscope) for their support. Our model is now available at [ModelScope](https://modelscope.cn/models/PaddlePaddle/Unlimited-OCR-2).
@@ -304,6 +305,16 @@ We would like to thank [Deepseek-OCR](https://github.com/deepseek-ai/DeepSeek-OC
 
 ## Citation
 ```bibtex
+@misc{wei2026unlimitedocrworks2,
+      title={Unlimited OCR Works 2}, 
+      author={Baidu ERNIE Team},
+      year={2026},
+      eprint={2610.39308},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2610.39308}, 
+}
+
 @misc{yin2026unlimitedocrworks,
       title={Unlimited OCR Works}, 
       author={Youyang Yin and Huanhuan Liu and YY and Qunyi Xie and Chaorun Liu and Shiqi Yang and Shaohua Wang and Zhanlong Liu and Hao Zou and Jinyue Chen and Shu Wei and Jingjing Wu and Mingxin Huang and Zhen Wu and Guibin Wang and Tengyu Du and Lei Jia},
