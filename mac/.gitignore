@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Model directory (created by scripts/install.sh)
+# Contains a copy of the HF model + applied patches
+model_dir/
+model_dir_patched/
+
+# HF cache (downloaded model weights, ~7GB)
+# If you don't want to commit a pointer to your local cache, uncomment:
+# .cache/
+
+# Test outputs / debug
+*.log
+/tmp_ocr/
+/test_output/
+mcp_output/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
