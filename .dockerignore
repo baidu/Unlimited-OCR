@@ -1,0 +1,15 @@
+.git
+.github
+__pycache__
+*.pyc
+.venv
+venv
+outputs
+log
+assets
+examples
+wheel
+*.pdf
+*.png
+*.jpg
+*.jpeg
