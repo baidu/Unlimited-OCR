@@ -317,7 +317,7 @@ We would like to thank [Deepseek-OCR](https://github.com/deepseek-ai/DeepSeek-OC
 
 @misc{yin2026unlimitedocrworks,
       title={Unlimited OCR Works}, 
-      author={Youyang Yin and Huanhuan Liu and YY and Qunyi Xie and Chaorun Liu and Shiqi Yang and Shaohua Wang and Zhanlong Liu and Hao Zou and Jinyue Chen and Shu Wei and Jingjing Wu and Mingxin Huang and Zhen Wu and Guibin Wang and Tengyu Du and Lei Jia},
+      author={Baidu ERNIE Team},
       year={2026},
       eprint={2606.23050},
       archivePrefix={arXiv},
