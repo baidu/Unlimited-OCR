@@ -287,6 +287,8 @@ python infer.py --url 127.0.0.1:10000 --benchmark MPDocBench \
 python utils/process_unlimitedOCR2.py --infer-dir raw --out-dir pred
 ```
 
+A few dense or low-legibility pages can send the model into a repetition loop that runs until the token budget ([#55](https://github.com/baidu/Unlimited-OCR/issues/55)). Pass `--loop-guard` to `infer.py` to check each raw output for this: detected loops are truncated at the repetition onset with an explicit `<!-- looping output truncated by loop guard -->` marker, and the stats line reports `loop_detected`/`loop_truncated` so incomplete pages stay visible instead of filling the raw dir with garbage. The check is opt-in, works on the output text only, and leaves non-looping outputs byte-identical. `repetition_guard.py` can also be used on its own (`python repetition_guard.py --write <raw files>`) or from Python (`from repetition_guard import is_looping_output, truncate_looping_output`) with any other client.
+
 See [utils/README.md](utils/README.md) for the output format, the merging rules and the post-processing details.
 
 ## Visualization

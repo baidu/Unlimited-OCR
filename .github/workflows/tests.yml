@@ -1,0 +1,22 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install pytest requests pycodestyle
+      - run: python -m compileall -q infer.py utils repetition_guard.py
+      # PEP 8 is checked on the files added by the test suite; legacy files
+      # (infer.py, utils/) predate this check and are deliberately excluded.
+      - run: python -m pycodestyle repetition_guard.py tests/
+      - run: python -m pytest -q tests/
