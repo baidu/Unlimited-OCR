@@ -29,6 +29,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+from repetition_guard import is_looping_output, truncate_looping_output
 from sglang.srt.sampling.custom_logit_processor import DeepseekOCRNoRepeatNGramLogitProcessor
 
 # max_model_len per benchmark; gen_reserve = 0.3 * max_model_len.
@@ -126,14 +127,29 @@ def request_one(url, doc_dir, args):
         data = resp.json()
         choice = data['choices'][0]
         answer = choice['message'].get('content') or ''
+        loop_detected = loop_truncated = False
+        if args.loop_guard:
+            if is_looping_output(answer):
+                loop_detected = True
+                guarded = truncate_looping_output(answer)
+                loop_truncated = guarded != answer
+                answer = guarded
         usage = data.get('usage') or {}
-        return {
+        stats = {
             'doc': key, 'pages': len(pages), 'crop_mode': crop_mode,
             'max_tokens': payload['max_tokens'], 'finish_reason': choice.get('finish_reason'),
             'prompt_tokens': usage.get('prompt_tokens'),
             'completion_tokens': usage.get('completion_tokens'),
             'page_markers': answer.count('<PAGE>'), 'seconds': round(time.time() - t0, 1),
-        }, answer
+        }
+        if args.loop_guard:  # machine-readable incomplete-output status
+            stats['loop_detected'] = loop_detected
+            stats['loop_truncated'] = loop_truncated
+            stats['incomplete'] = bool(  # output may be missing content:
+                choice.get('finish_reason') == 'length'  # token budget hit
+                or loop_truncated  # guard cut a loop mid-document
+                or stats['page_markers'] < stats['pages'])  # pages missing
+        return stats, answer
     raise SystemExit(f'{key}: still failing after refit')
 
 
@@ -151,6 +167,12 @@ def main():
     ap.add_argument('--concurrency', type=int, default=4)
     ap.add_argument('--timeout', type=int, default=6000)
     ap.add_argument('--raw-dir', default=None, help='write raw outputs to <raw-dir>/<doc>.txt')
+    ap.add_argument('--loop-guard', action='store_true',
+                    help='check each raw output for pathological repetition (issue #55); '
+                         'truncates it at the repetition onset with an explicit marker and '
+                         'reports loop_detected/loop_truncated plus incomplete (output may '
+                         'be missing content: token budget hit, guard truncation, or fewer '
+                         '<PAGE> markers than input pages) in the stats line')
     ap.add_argument('--out', default=None, help='single document: write the raw output here')
     args = ap.parse_args()
 

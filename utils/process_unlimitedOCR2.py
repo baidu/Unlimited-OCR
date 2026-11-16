@@ -17,6 +17,9 @@ Conversion rules (format -> Markdown):
   * `cross_<t>`/`append_<t>`/`<MERGE>` -> grouped (union-find) and concatenated in
     reading order, matching the GT truncated-merge semantics
   * strip stray tokens; keep the heading tree single-rooted (matches the GT)
+  * strip the `<!-- looping output truncated by loop guard -->` marker left by
+    `infer.py --loop-guard` (an annotation, not document content; literal kept
+    in sync with `repetition_guard.TRUNCATION_MARKER` by the tests)
 
 Usage
 -----
@@ -49,6 +52,9 @@ BLOCK_RE = re.compile(
 TR_RE = re.compile(r'<tr\b[^>]*>.*?</tr>', re.I | re.S)
 TABLE_OPEN_RE = re.compile(r'<table\b[^>]*>', re.I)
 SPAN_ATTR_RE = re.compile(r'\b(colspan|rowspan)\s*=\s*"([^"]*)"', re.I)
+# annotation line appended by infer.py --loop-guard; never document content
+LOOP_GUARD_MARKER_RE = re.compile(
+    r'[ \t]*<!-- looping output truncated by loop guard -->[ \t]*\n?')
 
 DROP_LABELS = set()                       # header/footer/page_number kept (canonical default)
 IMAGE_LABELS = {'image', 'figure', 'picture', 'chart', 'img', 'seal'}
@@ -332,6 +338,7 @@ def _drop_empty_heads(items):
 def convert(result):
     """Unlimited-OCR 2 raw document string -> MarathonDocBench evaluation Markdown."""
     text = (result or '').strip()
+    text = LOOP_GUARD_MARKER_RE.sub('', text)  # loop-guard annotation
     if text.startswith('```markdown'):
         text = text[len('```markdown'):].strip()
     if text.endswith('```'):
