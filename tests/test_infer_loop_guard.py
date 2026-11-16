@@ -71,6 +71,22 @@ def _normal_answer():
     return "\n".join(parts)
 
 
+def _v2_looping_answer():
+    # a genuine-format V2 document: two normal pages, then the model
+    # degenerates into a V2-native variable-tail <BLOCK> bbox march (no
+    # <|det|> blocks, bbox commas defeat the segment signal)
+    head = "".join(
+        f"<PAGE><BLOCK>text[1,{i},99,{i + 4}]<FORK>第{i}行内容各不相同。\n"
+        for i in range(40)
+    )
+    loop = "".join(
+        f"<BLOCK>text[20, {100 + 38 * i}, 640, {136 + 38 * i}]"
+        f"<FORK>{UNIT_CN}\n"
+        for i in range(120)
+    )
+    return head + loop
+
+
 class _FakeResponse:
     def __init__(self, content, finish_reason="length", status_code=200):
         self.status_code = status_code
@@ -116,6 +132,7 @@ class InferLoopGuardTests(unittest.TestCase):
         stats, out, _ = self._request_one(answer, loop_guard=False)
         self.assertNotIn("loop_detected", stats)  # stats line unchanged
         self.assertNotIn("loop_truncated", stats)
+        self.assertNotIn("incomplete", stats)
         self.assertEqual(out, answer)  # looping output passed through as-is
 
     def test_enabled_guard_reports_and_bounds_looping_output(self):
@@ -135,6 +152,51 @@ class InferLoopGuardTests(unittest.TestCase):
         stats, out, _ = self._request_one(answer, loop_guard=True)
         self.assertFalse(stats["loop_detected"])
         self.assertFalse(stats["loop_truncated"])
+        self.assertEqual(out, answer)
+
+    def test_enabled_guard_detects_v2_format_loop(self):
+        # regression: the V2-native <BLOCK> bbox march (genuine V2 shape,
+        # no <|det|> blocks) was a confirmed false negative of the V1-only
+        # signals
+        answer = _v2_looping_answer()
+        stats, out, _ = self._request_one(answer, loop_guard=True)
+        self.assertTrue(stats["loop_detected"])
+        self.assertTrue(stats["loop_truncated"])
+        self.assertTrue(stats["incomplete"])  # guard cut the document
+        self.assertIn("loop guard", out)
+        self.assertLess(len(out), len(answer))
+        self.assertTrue(out.startswith(answer[:100]))
+
+    def test_incomplete_flag_when_pages_missing(self):
+        # the model stops early with fewer <PAGE> markers than input pages
+        # (2 input pages, 1 emitted): no silent success -- the stats line
+        # says the document is incomplete even without a loop
+        answer = ("<PAGE><BLOCK>text[1,1,99,5]<FORK>Only page one arrived\n")
+        stats, _, _ = self._request_one(answer, loop_guard=True,
+                                        finish_reason="stop")
+        self.assertEqual(stats["pages"], 2)
+        self.assertEqual(stats["page_markers"], 1)
+        self.assertFalse(stats["loop_detected"])
+        self.assertTrue(stats["incomplete"])
+
+    def test_incomplete_flag_when_token_budget_hit(self):
+        # finish_reason="length": the output was cut at the budget; content
+        # may be missing even though every page marker was emitted
+        answer = _normal_answer()
+        stats, _, _ = self._request_one(answer, loop_guard=True,
+                                        finish_reason="length")
+        self.assertTrue(stats["incomplete"])
+
+    def test_complete_output_not_marked_incomplete(self):
+        # every input page emitted and a clean server stop: success stays
+        # silent-success-free in both directions
+        answer = ("<PAGE><BLOCK>text[1,1,99,5]<FORK>Page one\n"
+                  "<PAGE><BLOCK>text[1,1,99,5]<FORK>Page two\n")
+        stats, out, _ = self._request_one(answer, loop_guard=True,
+                                          finish_reason="stop")
+        self.assertEqual(stats["page_markers"], 2)
+        self.assertFalse(stats["loop_detected"])
+        self.assertFalse(stats["incomplete"])
         self.assertEqual(out, answer)
 
     def test_guard_never_adds_requests_or_retries(self):

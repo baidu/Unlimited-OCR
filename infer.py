@@ -29,9 +29,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-from sglang.srt.sampling.custom_logit_processor import DeepseekOCRNoRepeatNGramLogitProcessor
-
 from repetition_guard import is_looping_output, truncate_looping_output
+from sglang.srt.sampling.custom_logit_processor import DeepseekOCRNoRepeatNGramLogitProcessor
 
 # max_model_len per benchmark; gen_reserve = 0.3 * max_model_len.
 BENCHMARKS = {'MPDocBench': 131072, 'MarathonDocBench': 786432}
@@ -146,6 +145,10 @@ def request_one(url, doc_dir, args):
         if args.loop_guard:  # machine-readable incomplete-output status
             stats['loop_detected'] = loop_detected
             stats['loop_truncated'] = loop_truncated
+            stats['incomplete'] = bool(  # output may be missing content:
+                choice.get('finish_reason') == 'length'  # token budget hit
+                or loop_truncated  # guard cut a loop mid-document
+                or stats['page_markers'] < stats['pages'])  # pages missing
         return stats, answer
     raise SystemExit(f'{key}: still failing after refit')
 
@@ -167,7 +170,9 @@ def main():
     ap.add_argument('--loop-guard', action='store_true',
                     help='check each raw output for pathological repetition (issue #55); '
                          'truncates it at the repetition onset with an explicit marker and '
-                         'reports loop_detected/loop_truncated in the stats line')
+                         'reports loop_detected/loop_truncated plus incomplete (output may '
+                         'be missing content: token budget hit, guard truncation, or fewer '
+                         '<PAGE> markers than input pages) in the stats line')
     ap.add_argument('--out', default=None, help='single document: write the raw output here')
     args = ap.parse_args()
 

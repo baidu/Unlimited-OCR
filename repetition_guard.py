@@ -3,9 +3,13 @@
 Some pages send OCR models into a degeneration loop: the same structural unit
 is re-emitted until the generation budget is exhausted (issue #55).  The loops
 observed on real pages are *variable-tail* repetitions -- each iteration
-differs in a few tokens, typically bounding-box coordinates inside
-``<|det|>...<|/det|>`` blocks or an incrementing counter -- so no exact-match
-n-gram processor of any size can ban them, and the failure only becomes
+differs in a few tokens, typically marching bounding-box coordinates or an
+incrementing counter.  Exact n-gram processors do not stop these loops at any
+size without destroying normal pages: on the reproduced loops the measured
+ban-coverage of loop continuations is 0.0000 for n >= 20 (including the
+shipped n=35, sliding-window and full-history alike) and only reaches
+0.69/0.52/0.37 at n=3/5/8, while a counterfactual n=5 on normal dense pages
+bans 12-92% of their natural continuations.  So the failure only becomes
 visible in the decoded output.
 
 This module works on decoded text only.  It is independent of the inference
@@ -18,16 +22,20 @@ of the hardware.  It provides:
   onset and append an explicit marker instead of unbounded garbage;
 * a small command line interface to check/truncate raw output files.
 
-The two detection signals and their default thresholds (>= 30 consecutive
+The detection signals and their default thresholds (>= 30 consecutive
 repeats, more than 2,000 characters) were calibrated on OmniDocBench
 v1.6 pages:
 reproduced loops measured 46 and 1,325 consecutive repeats while normal pages
 never exceeded 1 and 4.  Validation provenance: AMD gfx1151, Windows ROCm,
-transformers 4.52.1, greedy decoding (issue #55 evidence chain).  Detection is
+transformers 4.52.1, greedy decoding (issue #55 evidence chain).  The
+``<BLOCK>`` signal reuses the same threshold; on 30 genuine Unlimited-OCR-2
+documents (545 runs, largest 49k chars / 15 pages; Windows gfx1151) normal
+output never exceeded 2 consecutive normalized block units.  Detection is
 a heuristic: content with >= 30 *legitimately* consecutive identical units
-(rare; not observed in the calibration corpus) would also be flagged; keep the
-guard disabled for such inputs.  Repetition without any ``<|det|>`` structure
-*and* without separators is a known blind spot.
+(rare; not observed in either calibration corpus) would also be flagged; keep
+the guard disabled for such inputs.  Repetition without block structure
+*and* without separators -- including V2 loops whose content itself varies
+on every iteration -- is a known blind spot.
 """
 
 import argparse
@@ -43,6 +51,18 @@ _DET_SPLIT_RE = re.compile(r"(<\|det\|>.*?<\|/det\|>)", re.DOTALL)
 _DET_BOX_RE = re.compile(r"(<\|det\|>\s*[\w-]+\s*)\[[^\]]*\](\s*<\|/det\|>)")
 _SEG_SPLIT_RE = re.compile(r"[，,;；\n\r]+|(?=<\|det\|>)|(?<=<\|/det\|>)")
 _DIGIT_RE = re.compile(r"\d+")
+
+# Unlimited-OCR-2 documents are <PAGE>-separated strings of
+# <BLOCK>label[<LEVELn>][x1,y1,x2,y2]<FORK>content units (see
+# utils/process_unlimitedOCR2.py).  The bbox commas also split the segment
+# signal inside the coordinates, so the same unit construction as for
+# <|det|> blocks is applied to <BLOCK> heads.
+_V2_HEAD_RE = re.compile(
+    r"(<\s*BLOCK\s*>\s*[a-zA-Z_][a-zA-Z_0-9]*"
+    r"(?:\s*<\s*/?\s*LEVEL\s*\d*\s*[>}])?"
+    r"(?:\s*\[[^\]]*\])?)", re.I)
+_V2_PAGE_RE = re.compile(r"<\s*/?\s*PAGE\s*\d*\s*>", re.I)
+_V2_BOX_RE = re.compile(r"\[[^\]]*\]")
 
 
 def _max_consecutive_repeats(items):
@@ -75,16 +95,38 @@ def _block_units(text):
     return units
 
 
+def _v2_block_units(text):
+    """Split Unlimited-OCR-2 output into units: ``<BLOCK>`` head with the bbox
+    masked plus the content up to the next head, page markers and surrounding
+    whitespace normalized away.
+
+    Loop iterations differ from each other mainly in bbox coordinate digits,
+    exactly as in the ``<|det|>`` loops, so coordinates are masked before
+    comparison while label, level and recognized content stay part of the
+    unit.
+    """
+    parts = _V2_HEAD_RE.split(text)
+    units = []
+    for i in range(1, len(parts), 2):
+        tail = parts[i + 1] if i + 1 < len(parts) else ''
+        head = _V2_BOX_RE.sub('[BBOX]', parts[i])
+        content = _V2_PAGE_RE.sub('', tail).strip()
+        units.append(head + content)
+    return units
+
+
 def is_looping_output(text, min_chars=LOOPING_MIN_CHARS,
                       block_repeats=LOOPING_BLOCK_REPEATS,
                       pattern_repeats=LOOPING_PATTERN_REPEATS):
     """Return True if ``text`` shows pathological repetition (issue #55).
 
-    Two signals, either of which is sufficient:
+    Three signals, any of which is sufficient:
 
     1. structure-normalized units (det block with the bbox masked plus its
        content) repeating consecutively at least ``block_repeats`` times;
-    2. digit-masked segments repeating consecutively at least
+    2. the same for Unlimited-OCR-2 ``<BLOCK>label[LEVELn][bbox]<FORK>``
+       units (the ASCII commas inside the bbox also defeat signal 3 there);
+    3. digit-masked segments repeating consecutively at least
        ``pattern_repeats`` times (counter loops such as
        ``3271年出生，3272年出生，...``).
 
@@ -95,6 +137,9 @@ def is_looping_output(text, min_chars=LOOPING_MIN_CHARS,
         return False
     units = _block_units(text)
     if units and _max_consecutive_repeats(units) >= block_repeats:
+        return True
+    v2_units = _v2_block_units(text)
+    if v2_units and _max_consecutive_repeats(v2_units) >= block_repeats:
         return True
     segs = [s.strip() for s in _SEG_SPLIT_RE.split(text) if s.strip()]
     masked = [_DIGIT_RE.sub('#', s) for s in segs]
@@ -109,9 +154,9 @@ def looping_onset(text, min_chars=LOOPING_MIN_CHARS,
     None when ``text`` is empty or contains no qualifying run (same repeat
     thresholds as :func:`is_looping_output`; unlike it, this function does
     not apply the ``min_chars`` length gate -- callers gate on
-    :func:`is_looping_output` first).  The block signal is preferred: when
-    both signals fire, the earliest block-run start is returned.  Never
-    raises.
+    :func:`is_looping_output` first).  The block signals are preferred: when
+    several fire, the earliest det-block or ``<BLOCK>``-unit run start is
+    returned.  Never raises.
     """
     if not text:
         return None
@@ -125,6 +170,27 @@ def looping_onset(text, min_chars=LOOPING_MIN_CHARS,
         key = _DET_BOX_RE.sub(r'\1[BBOX]\2', parts[i]) + content.strip()
         units.append((key, pos))
         pos += len(parts[i]) + (nxt if nxt >= 0 else len(tail))
+    best_start, best_run, run_start, run = None, 0, None, 0
+    prev = object()
+    for key, start in units:
+        if key == prev:
+            run += 1
+            if run >= block_repeats and run > best_run:
+                best_run, best_start = run, run_start
+        else:
+            run_start, run = start, 1
+        prev = key
+    if best_start is not None:
+        return best_start
+    parts = _V2_HEAD_RE.split(text)
+    units = []
+    pos = len(parts[0]) if parts else 0
+    for i in range(1, len(parts), 2):
+        tail = parts[i + 1] if i + 1 < len(parts) else ''
+        head = _V2_BOX_RE.sub('[BBOX]', parts[i])
+        key = head + _V2_PAGE_RE.sub('', tail).strip()
+        units.append((key, pos))
+        pos += len(parts[i]) + len(tail)
     best_start, best_run, run_start, run = None, 0, None, 0
     prev = object()
     for key, start in units:

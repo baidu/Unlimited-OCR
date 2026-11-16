@@ -206,6 +206,133 @@ class TestLoopGuardTruncation(unittest.TestCase):
         self.assertEqual(out, text)
 
 
+def _v2_loop(iterations, start_y=100, sep="\n"):
+    # Unlimited-OCR-2 native shape (genuine gfx1151 outputs): blocks with
+    # ", "-separated bboxes, identical recognized content, marching
+    # coordinates -- the V2 analog of the issue #55 variable-tail loop.
+    return sep.join(
+        f"<BLOCK>text[20, {start_y + 38 * i}, 640, {start_y + 38 * i + 36}]"
+        f"<FORK>{UNIT_CN}"
+        for i in range(iterations))
+
+
+def _v2_normal_doc(pages=3):
+    # a genuine-format multi-page document whose content varies per block
+    # (english test card from the gfx1151 evidence, extended)
+    parts = []
+    for p in range(pages):
+        parts.append(
+            f"<PAGE><BLOCK>text[56, 95, 294, 167]<FORK>Page {p} 头部区域\n")
+        for i in range(12):
+            parts.append(
+                f"<BLOCK>text[56, {200 + 40 * i}, 400, {230 + 40 * i}]"
+                f"<FORK>第{p}页第{i}行，内容各不相同甲乙丙丁。\n")
+    return "".join(parts)
+
+
+class TestV2BlockFormat(unittest.TestCase):
+    """The <PAGE><BLOCK>label[bbox]<FORK> documents of Unlimited-OCR-2.
+
+    Regression tests for the confirmed false negatives of the V1-only
+    signals: bbox commas split the segment signal inside the coordinates
+    (max consecutive masked run 2) and no <|det|> blocks exist, so the
+    V2-native variable-tail loop below was previously undetectable.
+    """
+
+    def test_v2_variable_tail_bbox_march_detected(self):
+        self.assertTrue(is_looping_output(_v2_loop(120)))
+
+    def test_v2_concat_bbox_march_detected(self):
+        # no separators between blocks at all
+        self.assertTrue(is_looping_output(_v2_loop(120, sep="")))
+
+    def test_v2_exact_repeat_detected(self):
+        text = ("<BLOCK>text[20, 100, 640, 136]<FORK>" + UNIT_CN) * 120
+        self.assertTrue(is_looping_output(text))
+
+    def test_v2_page_marker_loop_detected(self):
+        text = "".join(
+            f"<PAGE><BLOCK>text[20, {100 + 38 * i}, 640, {136 + 38 * i}]"
+            f"<FORK>{UNIT_CN}"
+            for i in range(40))
+        self.assertTrue(is_looping_output(text))
+
+    def test_v2_loop_below_threshold_not_detected(self):
+        # 29 long-content units exceed min_chars but stay below the
+        # calibrated 30-repeat threshold (genuine normal documents never
+        # exceeded 2 consecutive normalized units)
+        body = "各不相同的较长正文内容，用于跨过最小长度门槛。" * 3
+        text = "\n".join(
+            f"<BLOCK>text[20, {100 + 38 * i}, 640, {136 + 38 * i}]<FORK>{body}"
+            for i in range(29))
+        self.assertGreater(len(text), 2000)
+        self.assertFalse(is_looping_output(text))
+
+    def test_v2_loop_at_threshold_detected(self):
+        body = "各不相同的较长正文内容，用于跨过最小长度门槛。" * 3
+        text = "\n".join(
+            f"<BLOCK>text[20, {100 + 38 * i}, 640, {136 + 38 * i}]<FORK>{body}"
+            for i in range(30))
+        self.assertTrue(is_looping_output(text))
+
+    def test_genuine_v2_normal_document_not_detected(self):
+        self.assertFalse(is_looping_output(_v2_normal_doc(pages=6)))
+
+    def test_genuine_v2_evidence_sample_not_detected(self):
+        # byte-shape of a genuine gfx1151 output (english test card):
+        # consecutive same-label blocks with different content and bboxes
+        sample = ("<PAGE><BLOCK>text[59, 99, 354, 156]<FORK>ROCm OCR Test\n"
+                  "<BLOCK>text[59, 240, 442, 301]<FORK>Hello from Windows.\n"
+                  "<BLOCK>text[59, 383, 290, 443]<FORK>Invoice 2026\n"
+                  "<BLOCK>text[59, 525, 278, 583]<FORK>Total 123.45\n")
+        self.assertFalse(is_looping_output(sample * 12))  # repeated card
+
+    def test_v2_counter_loop_with_separators_detected(self):
+        # a counter inside <FORK> content is segment-signal territory once
+        # separators exist; the block signal alone would not see it because
+        # the content differs on every iteration
+        text = ("<BLOCK>text[20, 100, 640, 136]<FORK>"
+                + "，".join(f"{y}年出生" for y in range(2500, 2900)))
+        self.assertTrue(is_looping_output(text))
+
+    def test_v2_content_counter_without_separators_is_known_limitation(self):
+        # content varies per iteration AND no separators: documented blind
+        # spot (same class as the V1 no-separator limitation)
+        text = "".join(
+            f"<BLOCK>text[20, {100 + 38 * i}, 640, {136 + 38 * i}]"
+            f"<FORK>{y}年出生"
+            for i, y in enumerate(range(2500, 2900)))
+        self.assertFalse(is_looping_output(text))
+
+    def test_v2_malformed_bbox_no_crash(self):
+        bad = "<BLOCK>text[1,2\n" * 200 + "<BLOCK>text[1,2,3]<FORK>甲" * 100
+        self.assertIsInstance(is_looping_output(bad), bool)
+
+    def test_v2_onset_points_at_block_start(self):
+        head = _v2_normal_doc(pages=2)
+        text = head + _v2_loop(60)
+        onset = looping_onset(text)
+        self.assertIsNotNone(onset)
+        self.assertEqual(text[onset:onset + 7], "<BLOCK>")
+
+    def test_v2_truncation_keeps_head_and_adds_marker(self):
+        head = _v2_normal_doc(pages=2)
+        text = head + _v2_loop(60)
+        out = truncate_looping_output(text)
+        self.assertIn(TRUNCATION_MARKER, out)
+        self.assertTrue(out.startswith(head))
+        self.assertLess(len(out), len(text))
+
+    def test_mixed_document_prefers_det_block_onset(self):
+        # a V2-format head followed by a V1-style det loop (the shape used
+        # in the infer integration tests): the det onset must win
+        head = _v2_normal_doc(pages=2)
+        text = head + _det_loop(60)
+        onset = looping_onset(text)
+        self.assertIsNotNone(onset)
+        self.assertEqual(text[onset:onset + 7], "<|det|>")
+
+
 class TestCommandLineInterface(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
