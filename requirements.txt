@@ -1,0 +1,12 @@
+torch>=2.10.0
+torchvision>=0.25.0
+transformers>=4.57.1
+Pillow>=12.1.1
+matplotlib>=3.10.8
+einops>=0.8.2
+addict>=2.4.0
+easydict>=1.13
+pymupdf>=1.27.2.2
+psutil>=7.2.2
+requests>=2.31.0
+gradio>=5.0.0
